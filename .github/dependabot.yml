@@ -1,0 +1,52 @@
+# Every dependency in package.json is pinned exactly (the adapter's peer ranges aside), so a Dependabot pull
+# request (or a hand bump that regenerates bun.lock) is the only way one moves. There is deliberately no
+# `allow:` block: an allowlist hides every dependency it does not name. Two pins sit outside what these
+# ecosystems update: bun (`packageManager`) and Node (`.node-version`); bump them by hand. The github-actions
+# ecosystem moves the actions in `.github/workflows/`, which are pinned by commit SHA with a `# vX.Y.Z` comment.
+# The actionlint image is pinned by digest with a `# X.Y.Z` comment; whether Dependabot moves a `docker://`
+# digest is unverified, so bump it by hand if no pull request does. `scripts/repo-policy.test.ts` checks that
+# every pin and comment has one of those two forms.
+#
+# One pull request per ecosystem per month, grouped, and at most three open at a time, so a month costs at most
+# three CI builds, not one build per dependency.
+#
+# Security updates are a separate Dependabot feature with no bun support: they arrive as `npm_and_yarn` pull
+# requests that edit package.json and cannot write bun.lock, so they always fail
+# `bun install --frozen-lockfile`. Apply the bump by hand (bun install regenerates the lock), fold it into a
+# normal pull request and close Dependabot's with a comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    open-pull-requests-limit: 3
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    groups:
+      # Majors included.
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: bun
+    directory: /
+    open-pull-requests-limit: 3
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore
+    versioning-strategy: increase
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+      major:
+        update-types: [major]
+    # The only dependencies held behind their latest major. Each is a recorded pin in CONTRIBUTING.md
+    # "Toolchain pins" with the condition that lifts it.
+    ignore:
+      # Held at 6.x until typescript-eslint supports TypeScript 7.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      # Tracks the Node LTS line in .node-version.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']

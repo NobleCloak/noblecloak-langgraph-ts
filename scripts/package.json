@@ -1,0 +1,20 @@
+{
+  "name": "@noblecloak/repo-scripts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Repository tooling: private-dependency guard, contract-pair check, pack and release helpers, the langgraph skill's acceptance run.",
+  "license": "Apache-2.0",
+  "author": "NobleCloak",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . ../eslint.config.js",
+    "test": "vitest run --coverage",
+    "clean": "rm -rf coverage .turbo"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "esbuild": "0.28.2",
+    "yaml": "2.9.1"
+  }
+}

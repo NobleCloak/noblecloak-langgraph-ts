@@ -1,0 +1,7 @@
+bun.lock
+LICENSE
+NOTICE
+**/dist/
+**/coverage/
+**/.turbo/
+artifacts/

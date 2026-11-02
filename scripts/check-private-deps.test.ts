@@ -1,0 +1,189 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { findViolations, runGuard } from './check-private-deps.js';
+
+const CLEAN_PACKAGE = { name: '@noblecloak/fixture', license: 'Apache-2.0' };
+
+let root: string;
+
+function write(relativePath: string, content: unknown): void {
+  const path = join(root, relativePath);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, typeof content === 'string' ? content : JSON.stringify(content, null, 2));
+}
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'guard-fixture-'));
+  write('package.json', { name: 'fixture-root', private: true, license: 'Apache-2.0' });
+  write('packages/a/package.json', CLEAN_PACKAGE);
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('findViolations', () => {
+  it('passes a clean workspace', () => {
+    expect(findViolations(root)).toEqual([]);
+  });
+
+  it.each(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'])(
+    'flags a dependency in %s that resolves from a foreign registry URL, and names the file and key',
+    (field) => {
+      write('packages/a/package.json', {
+        ...CLEAN_PACKAGE,
+        [field]: { '@acme-private/shared-auth': 'https://npm.pkg.github.com/download/x.tgz' },
+      });
+      expect(findViolations(root)).toEqual([
+        {
+          file: 'packages/a/package.json',
+          key: `${field}.@acme-private/shared-auth`,
+          kind: 'foreign-source-dependency',
+        },
+      ]);
+    }
+  );
+
+  it.each([
+    ['a git URL', 'git+https://example.com/acme/shared-auth.git'],
+    ['a github: shorthand', 'github:acme/shared-auth'],
+    ['a bare owner/repo shorthand', 'acme/shared-auth#v1'],
+    ['an npm: alias to a tarball URL', 'npm:https://example.com/shared-auth-1.0.0.tgz'],
+    ['a file: path that leaves the tree', 'file:../../../outside/shared-auth-1.0.0.tgz'],
+    ['a link: path that leaves the tree', 'link:/somewhere/else'],
+  ])('flags %s', (_label, spec) => {
+    write('packages/a/package.json', { ...CLEAN_PACKAGE, dependencies: { 'shared-auth': spec } });
+    expect(findViolations(root)).toEqual([
+      {
+        file: 'packages/a/package.json',
+        key: 'dependencies.shared-auth',
+        kind: 'foreign-source-dependency',
+      },
+    ]);
+  });
+
+  it.each([
+    ['a registry version', '1.0.0'],
+    ['a registry range', '^1.0.0'],
+    ['an npm: alias to a registry package', 'npm:@acme/shared-auth@1.0.0'],
+    ['a workspace link', 'workspace:*'],
+    ['a file: tarball inside the tree', 'file:../../vendor/shared-auth-1.0.0.tgz'],
+    ['a file: path to the tree root', 'file:../..'],
+  ])('passes %s', (_label, spec) => {
+    write('packages/a/package.json', { ...CLEAN_PACKAGE, dependencies: { 'shared-auth': spec } });
+    expect(findViolations(root)).toEqual([]);
+  });
+
+  it('flags a scope mapped to a foreign registry in an .npmrc', () => {
+    write('packages/a/.npmrc', '@acme-private:registry=https://npm.pkg.github.com\n');
+    expect(findViolations(root)).toEqual([
+      { file: 'packages/a/.npmrc', key: 'line 1', kind: 'foreign-registry' },
+    ]);
+  });
+
+  it('flags a tarball URL and a git source in bun.lock, and passes a file: tarball', () => {
+    write(
+      'bun.lock',
+      [
+        '{',
+        '  "packages": {',
+        '    "@acme-private/shared-auth": ["@acme-private/shared-auth@1.0.0", "https://npm.pkg.github.com/download/x.tgz", {}],',
+        '    "zod": ["zod@4.0.0", "", {}, "sha512-x"],',
+        '    "left-pad": ["left-pad@github:acme/left-pad#abc", {}],',
+        '    "@noblecloak/client": ["@noblecloak/client@file:../../vendor/noblecloak-client-0.10.0.tgz", {}],',
+        '  },',
+        '}',
+      ].join('\n')
+    );
+    expect(findViolations(root)).toEqual([
+      { file: 'bun.lock', key: 'line 3', kind: 'foreign-source-dependency' },
+      { file: 'bun.lock', key: 'line 5', kind: 'foreign-source-dependency' },
+    ]);
+  });
+
+  it('passes a bun.lock that only names public packages', () => {
+    write(
+      'bun.lock',
+      '{\n  "packages": {\n    "zod": ["zod@4.0.0", "", {}, "sha512-x"],\n  },\n}\n'
+    );
+    expect(findViolations(root)).toEqual([]);
+  });
+
+  it('flags a scope mapped to a foreign registry in bunfig.toml, and passes the public registry', () => {
+    write('bunfig.toml', '[install.scopes]\nacme-private = "https://npm.pkg.github.com"\n');
+    expect(findViolations(root)).toEqual([
+      { file: 'bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
+    ]);
+    write('bunfig.toml', '[install]\nregistry = "https://registry.npmjs.org"\n');
+    expect(findViolations(root)).toEqual([]);
+  });
+
+  it('flags a foreign registry in publishConfig.registry', () => {
+    write('packages/a/package.json', {
+      ...CLEAN_PACKAGE,
+      publishConfig: { registry: 'https://npm.pkg.github.com' },
+    });
+    expect(findViolations(root)).toEqual([
+      {
+        file: 'packages/a/package.json',
+        key: 'publishConfig.registry',
+        kind: 'foreign-registry',
+      },
+    ]);
+  });
+
+  it('flags an auth token line in an .npmrc', () => {
+    write('.npmrc', 'registry=https://registry.npmjs.org\n//registry.npmjs.org/:_authToken=abc\n');
+    expect(findViolations(root)).toEqual([
+      { file: '.npmrc', key: 'line 2', kind: 'npm-auth-token' },
+    ]);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['a different license', 'MIT'],
+  ])('flags a package.json whose license is %s', (_label, license) => {
+    write('packages/a/package.json', { name: '@noblecloak/fixture', license });
+    expect(findViolations(root)).toEqual([
+      { file: 'packages/a/package.json', key: 'license', kind: 'missing-apache-license' },
+    ]);
+  });
+
+  it('reports a package.json that is not valid JSON', () => {
+    write('packages/a/package.json', '{ not json');
+    expect(findViolations(root)).toEqual([
+      { file: 'packages/a/package.json', key: '(file)', kind: 'unreadable-package-json' },
+    ]);
+  });
+
+  it('does not descend into node_modules or build output', () => {
+    write('node_modules/x/package.json', { name: 'x', license: 'MIT' });
+    write('packages/a/dist/package.json', { name: 'y' });
+    expect(findViolations(root)).toEqual([]);
+  });
+});
+
+describe('runGuard', () => {
+  it('prints each violation with its file and exits 1', () => {
+    write('packages/a/package.json', {
+      name: '@noblecloak/fixture',
+      devDependencies: { '@acme-private/shared-types': 'github:acme/shared-types' },
+    });
+    const lines: string[] = [];
+    expect(runGuard(root, (line) => lines.push(line))).toBe(1);
+    expect(lines.join('\n')).toContain(
+      'packages/a/package.json: devDependencies.@acme-private/shared-types'
+    );
+    expect(lines.join('\n')).toContain('packages/a/package.json: license');
+  });
+
+  it('prints a success line and exits 0 on a clean workspace', () => {
+    const lines: string[] = [];
+    expect(runGuard(root, (line) => lines.push(line))).toBe(0);
+    expect(lines).toEqual(['private-dependency guard: OK (2 package.json files checked)']);
+  });
+});

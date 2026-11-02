@@ -1,0 +1,4 @@
+[install]
+# Hoisted layout: scripts/contract.ts and the skill's acceptance run read the contract packages from the
+# repository root's node_modules/@noblecloak/, where this layout puts them.
+linker = "hoisted"

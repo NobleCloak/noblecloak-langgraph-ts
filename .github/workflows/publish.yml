@@ -1,0 +1,139 @@
+# Packing runs on every main push and every v* tag and uploads the tarballs as an artifact (the dry run).
+# Two publish jobs follow it, each behind its own repository variable, and both are off until that variable
+# is set:
+#   - `publish github-packages` publishes to the NobleCloak organisation's private GitHub Packages registry
+#     when PRIVATE_PUBLISH_ENABLED is 'true' on a repository owned by NobleCloak. It authenticates with the
+#     run's `github.token` and reads no secret.
+#   - `publish npm` publishes to npmjs through OIDC trusted publishing when PUBLIC_RELEASE_ENABLED is 'true'.
+#     It reads no npm token. It stays off until the package is released publicly.
+#
+# Both publish only package versions the registry does not have yet (scripts/release.ts skips the rest), so a
+# main push that changes no version publishes nothing. `needs: pack` makes the dry run pass first.
+#
+# Neither publish job runs `bun install` or a build, so no dependency's code runs where a publish credential
+# exists. Each downloads the `npm-packages` artifact the pack job built and publishes those exact tarballs.
+#
+# Every job that holds a write scope checks out with `persist-credentials: false`, so the token is not left in
+# `.git/config` for dependency code to read. `changesets/action` authenticates with the token it is handed; the
+# first version pull request at the go-ahead is the proof, and `git -c http.extraheader` is the fallback if that
+# push fails.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: publish pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run pack:all
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-packages
+          path: artifacts/*.tgz
+          if-no-files-found: error
+
+  version:
+    name: publish version
+    # Opens or updates the Changesets version pull request. Publishes nothing. The pull request is
+    # opened with github.token, so no pull_request workflow runs on it until a maintainer closes
+    # and reopens it (CONTRIBUTING.md, "CI and publishing").
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          # version-packages also refreshes bun.lock so the version PR passes --frozen-lockfile.
+          version-script: bun run version-packages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  publish-github-packages:
+    name: publish github-packages
+    needs: pack
+    if: github.repository_owner == 'NobleCloak' && vars.PRIVATE_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          registry-url: https://npm.pkg.github.com
+          scope: '@noblecloak'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-packages
+          path: artifacts
+      # No install and no build here: release.ts needs only Node built-ins and runs with `bun --no-install`,
+      # so no package from the lockfile executes in this job. It publishes only @noblecloak/langgraph.
+      - run: bun --no-install scripts/release.ts --registry https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+
+  publish:
+    name: publish npm
+    needs: pack
+    if: vars.PUBLIC_RELEASE_ENABLED == 'true'
+    # npm's trusted-publisher entry for each package names this environment, so a token minted
+    # outside it (a modified publish.yml on a pushed tag that drops this line) is refused.
+    environment: npm-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-packages
+          path: artifacts
+      # No install and no build here either; see the header.
+      - run: bun run release

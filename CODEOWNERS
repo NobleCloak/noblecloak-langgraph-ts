@@ -1,0 +1,7 @@
+# Default owner for everything in the repository.
+*                @dmcnelis
+
+# The contract packages this adapter is built against: the vendored tarballs, their checksums and the record
+# of the pair.
+/vendor/         @dmcnelis
+/contract.json   @dmcnelis

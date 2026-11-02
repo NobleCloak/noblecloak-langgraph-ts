@@ -1,0 +1,50 @@
+{
+  "name": "noblecloak-langgraph-ts",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "NobleCloak",
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "workspaces": [
+    "packages/*",
+    "examples/*",
+    "docs/snippets",
+    "scripts"
+  ],
+  "scripts": {
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "gate": "turbo run format:check lint typecheck test && bun run build",
+    "guard": "bun scripts/check-private-deps.ts",
+    "pack:all": "bun scripts/pack-all.ts",
+    "release": "bun --no-install scripts/release.ts",
+    "exercise:skill": "bun scripts/skill-exercise-agent.ts",
+    "changeset": "changeset",
+    "clean": "turbo run clean",
+    "version-packages": "changeset version && bun install --lockfile-only"
+  },
+  "devDependencies": {
+    "@changesets/cli": "3.0.3",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "tsup": "9.0.0",
+    "turbo": "2.11.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "overrides": {
+    "@noblecloak/client": "file:./vendor/noblecloak-client-0.10.0.tgz",
+    "@noblecloak/spec": "file:./vendor/noblecloak-spec-0.9.0.tgz"
+  }
+}

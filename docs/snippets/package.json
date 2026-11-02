@@ -1,0 +1,28 @@
+{
+  "name": "@noblecloak/langgraph-docs-snippets",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The code samples of the how-to guides under docs/how-to, typechecked.",
+  "license": "Apache-2.0",
+  "author": "NobleCloak",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --coverage",
+    "clean": "rm -rf coverage .turbo"
+  },
+  "dependencies": {
+    "@langchain/core": "1.3.0",
+    "@langchain/langgraph": "1.5.2",
+    "@langchain/langgraph-checkpoint-sqlite": "1.1.0",
+    "@noblecloak/client": "file:../../vendor/noblecloak-client-0.10.0.tgz",
+    "@noblecloak/langgraph": "workspace:*",
+    "langchain": "1.5.19",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@noblecloak/spec": "file:../../vendor/noblecloak-spec-0.9.0.tgz"
+  }
+}

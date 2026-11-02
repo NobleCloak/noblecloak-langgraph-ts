@@ -1,0 +1,60 @@
+{
+  "name": "@noblecloak/langgraph",
+  "version": "0.3.9",
+  "description": "Approvals for LangGraph JS: decide, pause, verify, resume.",
+  "license": "Apache-2.0",
+  "author": "NobleCloak",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NobleCloak/noblecloak-langgraph-ts.git",
+    "directory": "packages/langgraph"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --coverage",
+    "clean": "rm -rf dist coverage .turbo"
+  },
+  "dependencies": {
+    "@noblecloak/client": "file:../../vendor/noblecloak-client-0.10.0.tgz"
+  },
+  "peerDependencies": {
+    "@langchain/core": "^1.1.48",
+    "@langchain/langgraph": "^1.4.19",
+    "langchain": "^1.5.15"
+  },
+  "devDependencies": {
+    "@langchain/core": "1.3.0",
+    "@langchain/langgraph": "1.5.2",
+    "@langchain/langgraph-checkpoint-sqlite": "1.1.0",
+    "@noblecloak/spec": "file:../../vendor/noblecloak-spec-0.9.0.tgz",
+    "langchain": "1.5.19",
+    "zod": "4.6.7"
+  },
+  "peerDependenciesMeta": {
+    "langchain": {
+      "optional": true
+    }
+  }
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs the private-dependency guard before every commit (CONTRIBUTING.md, "Local gate").
+# `bun install` points git at this directory through the root `prepare` script.
+exec bun run guard

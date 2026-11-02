@@ -1,0 +1,6 @@
+# Secret scan for this repository: gitleaks' default rules, no allowlist. Run it over the tracked files with
+#   gitleaks git --config .gitleaks.toml .
+title = "noblecloak-langgraph-ts"
+
+[extend]
+useDefault = true
