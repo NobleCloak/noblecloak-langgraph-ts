@@ -294,7 +294,8 @@ describe('the langgraph wall-time report', () => {
   });
 });
 
-describe('the governance template', () => {
+// The first import of the template transpiles it: 5.5 s on a GitHub runner, so the describe has its own timeout.
+describe('the governance template', { timeout: 60_000 }, () => {
   const jwt = (sub: string): string =>
     `h.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.s`;
   interface GovernanceTemplate {
