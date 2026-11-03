@@ -46,7 +46,9 @@ suite). Both install by exact version from the NobleCloak organisation's package
 The root `.npmrc` maps the `@noblecloak` scope to that registry and reads the token from `NODE_AUTH_TOKEN`; it
 holds no token itself. To install locally you need a personal GitHub token with the `read:packages` scope in
 that variable, for example `NODE_AUTH_TOKEN="$(gh auth token)" bun install --frozen-lockfile` when your `gh`
-login has the scope. Keep the token in your environment, never in a file in the repository. Without it the
+login has the scope. Keep the token in your environment, never in a file in the repository. A token kept in
+`~/.npmrc` is not used here: the root `.npmrc` sets the same `//npm.pkg.github.com/:_authToken` key from
+`NODE_AUTH_TOKEN`, and the project file overrides the user one, so set the variable. Without it the
 install fails on the two packages (401); it does not fall back to npmjs. CI hands each install the job token
 (`packages: read`).
 

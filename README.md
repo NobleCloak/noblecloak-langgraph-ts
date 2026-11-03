@@ -54,7 +54,8 @@ by exact version from the NobleCloak organisation's package registry on GitHub P
 maps the `@noblecloak` scope to. That file holds no token: it reads one from `NODE_AUTH_TOKEN`. Locally, set
 that variable to a personal GitHub token with the `read:packages` scope (for example
 `NODE_AUTH_TOKEN="$(gh auth token)"` when your `gh` login has that scope); keep the token in your environment,
-never in the repository. CI hands the job token to each install. `contract.json` names the pair and
+never in the repository. A token in `~/.npmrc` is not used: the root `.npmrc` sets the same key from the variable
+and overrides it. CI hands the job token to each install. `contract.json` names the pair and
 `scripts/contract.test.ts` keeps it the same everywhere it is named.
 
 ## Related
