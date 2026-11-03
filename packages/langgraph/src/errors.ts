@@ -45,9 +45,10 @@ export type GovernanceErrorCode =
   /** Policy asks for approval and the deployment cannot route one (`whenUnroutable: 'deny'`). */
   | 'unroutable'
   /**
-   * The call is for a tool the deployment executes (the approval handle says no `resume_token` will
-   * issue), wrapped here as a local function: this process has nothing to consume and must not run it.
-   * Denied before anyone is asked to approve.
+   * The call is for a tool the deployment executes, wrapped here as a local function: this process has
+   * nothing to consume and must not run it. Either a `step_up` whose approval handle says no `resume_token`
+   * will issue (denied before anyone is asked to approve), or an `allow` that carries an approval handle
+   * (the gateway admits the call by an approval nothing here consumes; denied after the approver acted).
    */
   | 'not_locally_executable'
   /**

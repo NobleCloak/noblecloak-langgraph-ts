@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { denialCodeOf } from './denial.js';
-import { gatewayCallContext } from './gateway.js';
+import { EXTERNAL_RUN_ID_KEY, gatewayCallContext } from './gateway.js';
 import { governed, governedToolNode } from './governed.js';
 import { resumeApproval } from './resume.js';
 import { ask, buildGraph, call, makeTools, start, textOf, TOOL_REFS } from '../test/graph.js';
@@ -360,7 +360,8 @@ describe('gatewayTools: a refused re-issued call', () => {
 });
 
 describe('gatewayTools: the worker is a separate graph', () => {
-  it('a worker graph that does not declare the tool still hands the function the run the gateway admits the call by', async () => {
+  /** An agent graph that declares the tool pauses; a worker graph, declared or not, resumes it. */
+  async function workerWorld(workerDeclares: boolean) {
     const h = await createHarness();
     const checkpointer = new MemorySaver();
     const seen: unknown[] = [];
@@ -388,16 +389,35 @@ describe('gatewayTools: the worker is a separate graph', () => {
     const worker = buildGraph({
       script: CREATE,
       checkpointer,
-      toolNode: governedToolNode([make()], { toolRefs: TOOL_REFS, governance: h.governance }),
+      toolNode: governedToolNode([make()], {
+        toolRefs: TOOL_REFS,
+        governance: h.governance,
+        ...(workerDeclares ? { gatewayTools: ['create_issue'] } : {}),
+      }),
     });
     await agent.invoke(start(), CFG);
     const [id = ''] = h.approvals();
     await h.approve(id);
     const outcome = await resumeApproval(worker, id, { governance: h.governance });
+    return { h, seen, worker, id, outcome };
+  }
+
+  it('a worker graph that declares the tool is handed the run the gateway admits the call by', async () => {
+    const { h, seen, outcome } = await workerWorld(true);
     expect(outcome).toMatchObject({ status: 'resumed' });
     const runId = (h.seen('POST', '/v1/decisions')[1]?.body as { actor: { run_id: string } }).actor
       .run_id;
     expect(seen).toEqual([runId]);
+  });
+
+  it('a worker graph that omits the declaration runs nothing: the call is refused not_locally_executable and the approval stays approved for the gateway', async () => {
+    const { h, seen, worker, id } = await workerWorld(false);
+    expect(seen).toEqual([]);
+    const [denied] = await toolMessages(worker);
+    expect(denialCodeOf(denied)).toBe('not_locally_executable');
+    expect(h.mock.state.obligations.get(id)?.state).toBe('approved');
+    expect(h.seen('POST', '/v1/records')).toHaveLength(0);
+    expect(h.seen('POST', /\/consume$/)).toHaveLength(0);
   });
 });
 
@@ -455,5 +475,75 @@ describe('gatewayCallContext', () => {
     });
     await graph.invoke(start(), CFG);
     expect(seen).toEqual(['run_required']);
+  });
+});
+
+describe('gatewayCallContext: a run id the invoker places in configurable', () => {
+  it('is not handed to an undeclared tool: its function sees no key and asking for the run throws run_required', async () => {
+    const h = await createHarness();
+    const seen: unknown[] = [];
+    const inner = tool(
+      (args: { q: string }, config) => {
+        seen.push(
+          (config.configurable as Record<string, unknown> | undefined)?.[EXTERNAL_RUN_ID_KEY]
+        );
+        try {
+          gatewayCallContext(config);
+        } catch (error) {
+          seen.push((error as { code?: string }).code);
+        }
+        return `found ${args.q}`;
+      },
+      { name: 'search', description: 'Search.', schema: z.object({ q: z.string() }) }
+    );
+    const graph = buildGraph({
+      script: [ask(call('c1', 'search', { q: 'x' }))],
+      toolNode: governedToolNode([inner], { toolRefs: TOOL_REFS, governance: h.governance }),
+    });
+    await graph.invoke(start(), {
+      configurable: { ...CFG.configurable, [EXTERNAL_RUN_ID_KEY]: 'run_forged' },
+    });
+    expect(seen).toEqual([undefined, 'run_required']);
+  });
+
+  it('is replaced for a declared tool by the run the adapter decided under', async () => {
+    const h = await createHarness();
+    const seen: unknown[] = [];
+    const inner = tool(
+      (args: { title: string }, config) => {
+        seen.push(gatewayCallContext(config).externalRunId);
+        return `created ${args.title}`;
+      },
+      { name: 'create_issue', description: 'Create.', schema: z.object({ title: z.string() }) }
+    );
+    const graph = buildGraph({
+      script: CREATE,
+      toolNode: governedToolNode([inner], {
+        toolRefs: TOOL_REFS,
+        governance: h.governance,
+        gatewayTools: ['create_issue'],
+      }),
+    });
+    // The gateway admits the call on the first pass: the function runs with the run the adapter decided under.
+    await h.preapprove('t1', TOOL_REFS.create_issue, { title: 'x' });
+    await graph.invoke(start(), {
+      configurable: { ...CFG.configurable, [EXTERNAL_RUN_ID_KEY]: 'run_forged' },
+    });
+    const runId = (h.seen('POST', '/v1/decisions')[0]?.body as { actor: { run_id: string } }).actor
+      .run_id;
+    expect(runId).not.toBe('run_forged');
+    expect(seen).toEqual([runId]);
+  });
+
+  it('reads only a run this adapter handed off: a string or a look-alike object under the key throws run_required', () => {
+    for (const value of ['run_x', { run_id: 'run_x' }, Object.freeze({ run_id: 'run_x' })]) {
+      let code: unknown;
+      try {
+        gatewayCallContext({ configurable: { [EXTERNAL_RUN_ID_KEY]: value } });
+      } catch (error) {
+        code = (error as { code?: string }).code;
+      }
+      expect(code).toBe('run_required');
+    }
   });
 });

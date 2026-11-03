@@ -190,9 +190,10 @@ The mode is per tool. What the adapter does for a declared tool:
   `continuation_conflict` until the approval expires.
 
 The process that re-runs the node (the worker, or a builder who resumes) makes the gateway call. It owns the
-MCP client and the gateway token, and its graph should declare the same `gatewayTools`: the adapter hands
-the function the run on any allow that carries an approval handle, so a worker graph that omits the
-declaration still names the run, but only a declared graph denies `run_required` and pauses a first pass.
+MCP client and the gateway token, and its graph must declare the same `gatewayTools`: an `allow` that
+carries an approval handle is the gateway admitting the call by an approval nothing in your process
+consumes, so on a tool that is not declared it is refused `not_locally_executable` and nothing runs. A
+worker graph that omits the declaration therefore runs nothing; the approval stays approved for the gateway.
 
 What stays yours:
 
@@ -329,8 +330,10 @@ run header and the approved arguments, and admits the call once.
     gateway instead of wrapping a function for it, or declare it gateway-executed (`gatewayTools` /
     `executedBy: 'gateway'`, see [Tools the gateway executes](#tools-the-gateway-executes)). The report and the denial say what became of the approval,
     from the withdraw's result: withdrawn, still open because the withdraw failed (the failure is reported
-    too), or only matched. When the gateway has admitted an approved call itself (the decision is `allow` and
-    carries the approval), the adapter runs no consume and appends no record. A Resumption with no
+    too), or only matched. An `allow` that carries an approval handle is the gateway admitting the call by an
+    approval it holds; on a tool that is not declared gateway-executed it is refused `not_locally_executable`
+    the same way (the approval has been answered, so nothing is withdrawn unless this call opened it). Only
+    for a declared tool does the adapter run the function on it, with no consume and no record. A Resumption with no
     `resume_token` for a call the gateway did not admit is refused when the node re-enters: the adapter has
     nothing to consume, so it denies the call rather than run it. That is the second line of defence.
 12. **An expired or withdrawn approval is matched to its thread by its continuation.** The server echoes the

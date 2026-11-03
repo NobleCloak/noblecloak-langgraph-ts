@@ -9,7 +9,7 @@ import { createMiddleware, toolRetryMiddleware } from 'langchain';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { gatewayCallContext } from '../src/gateway.js';
+import { EXTERNAL_RUN_ID_KEY, gatewayCallContext } from '../src/gateway.js';
 import { governanceMiddleware } from '../src/middleware.js';
 import { resumeApproval } from '../src/resume.js';
 import { ask, buildAgent, call, makeTools, start, textOf, TOOL_REFS } from './graph.js';
@@ -360,5 +360,65 @@ describe('governanceMiddleware: tools the gateway executes', () => {
         gatewayTools: ['create_isue'],
       })
     ).toThrow(/gatewayTools names create_isue/);
+  });
+});
+
+describe('governanceMiddleware: a run id the invoker places in configurable', () => {
+  it('is not handed to an undeclared tool: its function sees no key and asking for the run throws run_required', async () => {
+    const h = await createHarness();
+    const seen: unknown[] = [];
+    const search = tool(
+      (args: { q: string }, config) => {
+        seen.push(
+          (config.configurable as Record<string, unknown> | undefined)?.[EXTERNAL_RUN_ID_KEY]
+        );
+        try {
+          gatewayCallContext(config);
+        } catch (error) {
+          seen.push((error as { code?: string }).code);
+        }
+        return `found ${args.q}`;
+      },
+      { name: 'search', description: 'Search.', schema: z.object({ q: z.string() }) }
+    );
+    const agent = buildAgent({
+      script: [ask(call('c1', 'search', { q: 'x' }))],
+      tools: [search],
+      middleware: [governanceMiddleware(h.governance, { toolRefs: { search: TOOL_REFS.search } })],
+    });
+    await agent.invoke(start(), {
+      configurable: { thread_id: 'mw-forged', [EXTERNAL_RUN_ID_KEY]: 'run_forged' },
+    });
+    expect(seen).toEqual([undefined, 'run_required']);
+  });
+
+  it('is replaced for a declared tool by the run the adapter decided under', async () => {
+    const h = await createHarness();
+    const seen: unknown[] = [];
+    const createIssue = tool(
+      (args: { title: string }, config) => {
+        seen.push(gatewayCallContext(config).externalRunId);
+        return `created ${args.title}`;
+      },
+      { name: 'create_issue', description: 'Create.', schema: z.object({ title: z.string() }) }
+    );
+    const agent = buildAgent({
+      script: [ask(call('c1', 'create_issue', { title: 'x' }))],
+      tools: [createIssue],
+      middleware: [
+        governanceMiddleware(h.governance, {
+          toolRefs: { create_issue: TOOL_REFS.create_issue },
+          gatewayTools: ['create_issue'],
+        }),
+      ],
+    });
+    await h.preapprove('mw-forged-2', TOOL_REFS.create_issue, { title: 'x' });
+    await agent.invoke(start(), {
+      configurable: { thread_id: 'mw-forged-2', [EXTERNAL_RUN_ID_KEY]: 'run_forged' },
+    });
+    const runId = (h.seen('POST', '/v1/decisions')[0]?.body as { actor: { run_id: string } }).actor
+      .run_id;
+    expect(runId).not.toBe('run_forged');
+    expect(seen).toEqual([runId]);
   });
 });

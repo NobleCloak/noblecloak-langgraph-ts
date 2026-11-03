@@ -535,12 +535,14 @@ describe('resumeApproval: the failure exits', () => {
           governed(tools.createIssue, {
             toolRef: TOOL_REFS.create_issue,
             governance: h.governance,
+            executedBy: 'gateway',
           }),
         ],
         { handleToolErrors: false }
       ),
     });
-    // The gateway admits the call on an approval that was answered: the adapter dispatches it, once.
+    // The gateway admits the call on an approval that was answered: the adapter dispatches the declared
+    // gateway call, once.
     await h.preapprove('t1', TOOL_REFS.create_issue, { title: 'x' });
     await expect(graph.invoke(start(), CFG)).rejects.toThrow(/tracker down/);
     expect(counters.runs).toHaveLength(1);
