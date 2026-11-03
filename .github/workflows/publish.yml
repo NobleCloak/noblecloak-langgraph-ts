@@ -13,6 +13,9 @@
 # Neither publish job runs `bun install` or a build, so no dependency's code runs where a publish credential
 # exists. Each downloads the `npm-packages` artifact the pack job built and publishes those exact tarballs.
 #
+# `pack` and `version` install the contract packages from the organisation's package registry: each holds
+# `packages: read` and hands the job token to `bun install` as NODE_AUTH_TOKEN, which the root .npmrc reads.
+#
 # Every job that holds a write scope checks out with `persist-credentials: false`, so the token is not left in
 # `.git/config` for dependency code to read. `changesets/action` authenticates with the token it is handed; the
 # first version pull request at the go-ahead is the proof, and `git -c http.extraheader` is the fallback if that
@@ -35,6 +38,9 @@ jobs:
   pack:
     name: publish pack
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +52,8 @@ jobs:
         with:
           node-version-file: .node-version
       - run: bun install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: bun run build
       - run: bun run pack:all
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -64,6 +72,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      packages: read
     steps:
       # fetch-depth: 0: `changeset version` looks up the commit that added each changeset for the
       # changelog, and on a shallow clone it runs `git fetch --deepen`, which fails without the
@@ -77,6 +86,8 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           # version-packages also refreshes bun.lock so the version PR passes --frozen-lockfile.
