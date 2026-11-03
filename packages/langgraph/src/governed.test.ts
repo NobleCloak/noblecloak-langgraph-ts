@@ -524,17 +524,65 @@ describe('governed: the decision table', () => {
     expect(h.mock.state.obligations.get(id)?.argDigest).toBe(digest);
   });
 
-  it('a gateway-admitted approval (allow with an approval handle): runs without consuming or recording', async () => {
-    const { h, counters, graph } = await setup(
-      { script: [ask(call('c1', 'create_issue', { title: 'x' }))] },
-      ['createIssue']
-    );
-    // An approval for the call exists, in the thread's run, and is approved: the gateway admits the call.
-    await h.preapprove('t1', TOOL_REFS.create_issue, { title: 'x' });
-    await graph.invoke(start(), CFG);
-    expect(counters.runs).toHaveLength(1);
-    expect(h.seen('POST', /\/consume$/)).toHaveLength(0);
-    expect(h.seen('POST', '/v1/records')).toHaveLength(0);
+  describe('an allow that carries an approval handle: the deployment admits the call by an approval it holds, and executes the tool', () => {
+    it('on a tool this process would run locally: refused not_locally_executable, nothing runs, nothing is consumed or recorded, and a matched approval is left as it is', async () => {
+      const errors: string[] = [];
+      const { h, counters, graph } = await setup(
+        {
+          governance: { onError: (e) => errors.push(e.code) },
+          script: [ask(call('c1', 'create_issue', { title: 'x' }))],
+        },
+        ['createIssue']
+      );
+      // An approval for the call exists, in the thread's run, and is approved: the gateway would admit
+      // the call. Nothing here consumes that approval, so a local function must not run on it.
+      const id = await h.preapprove('t1', TOOL_REFS.create_issue, { title: 'x' });
+      await graph.invoke(start(), CFG);
+      expect(counters.runs).toHaveLength(0);
+      expect(h.seen('POST', /\/consume$/)).toHaveLength(0);
+      expect(h.seen('POST', '/v1/records')).toHaveLength(0);
+      expect(h.seen('POST', /\/withdraw$/)).toHaveLength(0);
+      expect(h.mock.state.obligations.get(id)?.state).toBe('approved');
+      const [denied] = toolMessages(await messagesOf(graph));
+      expect(denialCodeOf(denied)).toBe('not_locally_executable');
+      expect(textOf(denied)).toContain('executed by the deployment');
+      expect(errors).toEqual(['not_locally_executable']);
+      const [report] = errors;
+      expect(report).toBeDefined();
+    });
+
+    it('withdraws the approval when this call opened it', async () => {
+      const { h, counters, graph } = await setup(
+        { script: [ask(call('c1', 'create_issue', { title: 'x' }))] },
+        ['createIssue']
+      );
+      const digest = await argDigest({ title: 'x' });
+      h.intercept = (request) =>
+        new URL(request.url).pathname === '/v1/decisions'
+          ? Response.json({
+              data: {
+                decision: 'allow',
+                action_digest: digest,
+                enforced: true,
+                approval: {
+                  id: 'apr_opened_here',
+                  state: 'approved',
+                  created: true,
+                  created_at: new Date().toISOString(),
+                  resume_token_will_issue: false,
+                },
+              },
+              meta: { request_id: 'r', deployment: 'hosted' },
+            })
+          : undefined;
+      await graph.invoke(start(), CFG);
+      expect(counters.runs).toHaveLength(0);
+      expect(h.seen('POST', /\/withdraw$/).map((r) => r.path)).toEqual([
+        '/v1/approvals/apr_opened_here/withdraw',
+      ]);
+      const [denied] = toolMessages(await messagesOf(graph));
+      expect(denialCodeOf(denied)).toBe('not_locally_executable');
+    });
   });
 
   it('step_up, cannot route, whenUnroutable deny (the default): denies, and sends no continuation', async () => {

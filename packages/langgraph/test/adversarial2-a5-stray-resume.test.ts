@@ -28,9 +28,11 @@ describe('A5: a claimant handed the resume value of another call is a fresh paus
       script: [
         ask(call('c1', 'send_email', { to: 'a@b.c' }), call('c2', 'send_sms', { to: '555' })),
       ],
+      // c1's tool is the gateway's: on the re-run the gateway admits it (an allow carrying the approval).
       toolNode: governedToolNode([made.sendEmail, made.sendSms], {
         toolRefs: TOOL_REFS,
         governance: h.governance,
+        gatewayTools: ['send_email'],
       }),
     });
     const first = await graph.invoke(start(), CFG);

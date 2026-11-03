@@ -190,9 +190,10 @@ The mode is per tool. What the adapter does for a declared tool:
   `continuation_conflict` until the approval expires.
 
 The process that re-runs the node (the worker, or a builder who resumes) makes the gateway call. It owns the
-MCP client and the gateway token, and its graph should declare the same `gatewayTools`: the adapter hands
-the function the run on any allow that carries an approval handle, so a worker graph that omits the
-declaration still names the run, but only a declared graph denies `run_required` and pauses a first pass.
+MCP client and the gateway token, and its graph must declare the same `gatewayTools`: an `allow` that
+carries an approval handle is the gateway admitting the call by an approval nothing in your process
+consumes, so on a tool that is not declared it is refused `not_locally_executable` and nothing runs. A
+worker graph that omits the declaration therefore runs nothing; the approval stays approved for the gateway.
 
 What stays yours:
 

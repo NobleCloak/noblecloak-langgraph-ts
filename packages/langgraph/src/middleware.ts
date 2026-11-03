@@ -20,7 +20,7 @@ import { isGraphInterrupt } from '@langchain/langgraph';
 import { createMiddleware, ToolInvocationError } from 'langchain';
 
 import { GovernanceError } from './errors.js';
-import { EXTERNAL_RUN_ID_KEY } from './gateway.js';
+import { configurableFor, EXTERNAL_RUN_ID_KEY, handedOffRun } from './gateway.js';
 import { governCall, readContext } from './governed.js';
 import type { Env, ObservedOutcome, ToolConfig } from './governed.js';
 import type { Governance } from './governance.js';
@@ -119,15 +119,12 @@ function singleUse(inner: StructuredToolInterface): {
         try {
           const input: unknown = args[0];
           const invokeConfig: ToolConfig | undefined = args[1];
-          const result: unknown = await target.invoke(
-            input as never,
-            runId === undefined
-              ? invokeConfig
-              : {
-                  ...invokeConfig,
-                  configurable: { ...invokeConfig?.configurable, [EXTERNAL_RUN_ID_KEY]: runId },
-                }
-          );
+          // The chain's configurable, without any run id the invoker placed under the hand-off key, plus
+          // the adapter's own hand-off when governance made one for this call.
+          const result: unknown = await target.invoke(input as never, {
+            ...invokeConfig,
+            configurable: configurableFor(invokeConfig?.configurable, runId),
+          });
           outcome = { ran: true, result };
           return result;
         } catch (error) {
@@ -220,8 +217,8 @@ export function governanceMiddleware(governance: Governance, options: Governance
         observedOutcome: observed,
         gateway: gatewayTools.has(toolCall.name),
         handler: async (args, invokeConfig) => {
-          const runId: unknown = invokeConfig.configurable?.[EXTERNAL_RUN_ID_KEY];
-          setRunId(typeof runId === 'string' ? runId : undefined);
+          const handed: unknown = invokeConfig.configurable?.[EXTERNAL_RUN_ID_KEY];
+          setRunId(handedOffRun(handed));
           return handler({
             ...request,
             tool: single,

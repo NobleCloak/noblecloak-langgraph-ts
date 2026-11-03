@@ -30,7 +30,7 @@ import type {
   Resumption,
 } from './api.js';
 import { GovernanceError, messageOf } from './errors.js';
-import { EXTERNAL_RUN_ID_KEY } from './gateway.js';
+import { configurableFor } from './gateway.js';
 import type { DenialCode } from './errors.js';
 import type { TaskSlot } from './coordination.js';
 import { coordinationOf } from './governance.js';
@@ -405,10 +405,18 @@ export async function governCall(
         slot?.settle(false);
         // But no call of the task runs on a pass that pauses the node: it would run again when the node re-runs.
         if (slot !== undefined && (await slot.siblingsPause())) return heldInTask(context);
-        // An approval handle on an allow: the gateway admits the call and records it itself.
+        // An approval handle on an allow: the deployment executes this tool, admits the call by the
+        // approval it holds, and records it itself. Nothing here consumes that approval, so only a
+        // function declared to be the gateway call runs on it. A local function would run the action with
+        // the approval still open, and any process that re-decided the call would run it again until the
+        // approval expired: refused, as a step_up for such a tool is.
+        if (decision.approval !== undefined && !env.gateway) {
+          return await refuseLocalExecution(env, context, decision.approval, 'allow');
+        }
         const gatewayRecords = decision.approval !== undefined;
         // Admitted on an approval: it is spent on this call, so a failed run is not a retryable one, and
-        // nothing here consumes it, so the replay guard is what stops a second dispatch of the same answer.
+        // nothing here consumes it. The replay guard stops a second dispatch of the same answer in this
+        // process; across processes the gateway's single use of the approval does.
         if (decision.approval !== undefined) {
           const { id, expires_at: expiresAt } = decision.approval;
           const until = new Date(
@@ -422,9 +430,6 @@ export async function governCall(
         return await execute(env, config, context, {
           decision: 'allow',
           record: !gatewayRecords,
-          // An allow on an approval handle is admitted by the gateway, so the function is handed the run
-          // whether or not this process's graph declares the tool (a worker may declare nothing).
-          handOffRun: env.gateway || gatewayRecords,
           runId,
           decisionPolicy: decision.policy,
         });
@@ -476,36 +481,7 @@ export async function governCall(
     // A tool declared gateway-executed is the exception: it pauses as a caller-consumer tool does, and the
     // gateway admits the re-issued call once the approver has acted.
     if (!handle.resume_token_will_issue && !env.gateway) {
-      const withdrawn = handle.created ? await withdrawStray(governance, handle.id) : undefined;
-      // What happened to the approval, from what was observed: opened here and withdrawn, opened here and
-      // still open (the withdraw failed), or only matched (opened by another call and left alone).
-      const [reported, told] =
-        withdrawn === true
-          ? [
-              ' The approval this call opened was withdrawn.',
-              'The approval this call opened was withdrawn.',
-            ]
-          : withdrawn === false
-            ? [
-                ' The approval this call opened could not be withdrawn and stays open until it expires.',
-                'The approval this call opened could not be withdrawn and may still be shown to an approver; do not retry the call.',
-              ]
-            : [
-                ' The approval was opened by another call and was left as it is.',
-                'It matched an approval another call opened, which was left as it is.',
-              ];
-      governance.report(
-        new GovernanceError(
-          'not_locally_executable',
-          `POST /v1/decisions for ${toolRef} answered step_up with resume_token_will_issue false (approval ${handle.id}): the deployment executes this tool, so a local function under this toolRef is never run. Dispatch the call through the gateway instead, or declare the tool with gatewayTools / executedBy: 'gateway' so this adapter pauses for the approval and your function makes the gateway call.${reported}`
-        ),
-        handle.id
-      );
-      return denial(
-        context,
-        'not_locally_executable',
-        `This tool is executed by the deployment, not by this process. ${told} ${NOT_RUN}`
-      );
+      return await refuseLocalExecution(env, context, handle, 'step_up');
     }
     if (!resumable) {
       if (handle.created) await withdrawStray(governance, handle.id);
@@ -620,6 +596,57 @@ async function closedApprovalOf(
   }
 }
 
+/**
+ * A decision whose approval handle says the deployment executes the tool, for a tool this process would
+ * run as a local function: a `step_up` whose Resumption will carry no `resume_token`, or an `allow` that
+ * carries a handle at all (the gateway admits the call by that approval, and nothing here consumes it).
+ * Refused before anything runs, as the spec's rule for the handle says: deny instead of running, and
+ * withdraw the approval if this call's own decision opened it; one it only matched was opened by another
+ * call and is left alone.
+ */
+async function refuseLocalExecution(
+  env: Env,
+  context: CallContext,
+  handle: NonNullable<Decision['approval']>,
+  decided: 'allow' | 'step_up'
+): Promise<ToolMessage> {
+  const { governance, toolRef } = env;
+  const withdrawn = handle.created ? await withdrawStray(governance, handle.id) : undefined;
+  // What happened to the approval, from what was observed: opened here and withdrawn, opened here and
+  // still open (the withdraw failed), or only matched (opened by another call and left alone).
+  const [reported, told] =
+    withdrawn === true
+      ? [
+          ' The approval this call opened was withdrawn.',
+          'The approval this call opened was withdrawn.',
+        ]
+      : withdrawn === false
+        ? [
+            ' The approval this call opened could not be withdrawn and stays open until it expires.',
+            'The approval this call opened could not be withdrawn and may still be shown to an approver; do not retry the call.',
+          ]
+        : [
+            ' The approval was opened by another call and was left as it is.',
+            'It matched an approval another call opened, which was left as it is.',
+          ];
+  const answered =
+    decided === 'allow'
+      ? `answered allow with an approval handle (approval ${handle.id}): the deployment executes this tool and admits the call by that approval, which nothing in this process consumes`
+      : `answered step_up with resume_token_will_issue false (approval ${handle.id}): the deployment executes this tool`;
+  governance.report(
+    new GovernanceError(
+      'not_locally_executable',
+      `POST /v1/decisions for ${toolRef} ${answered}, so a local function under this toolRef is never run. Dispatch the call through the gateway instead, or declare the tool with gatewayTools / executedBy: 'gateway' so this adapter pauses for the approval and your function makes the gateway call.${reported}`
+    ),
+    handle.id
+  );
+  return denial(
+    context,
+    'not_locally_executable',
+    `This tool is executed by the deployment, not by this process. ${told} ${NOT_RUN}`
+  );
+}
+
 /** A call that is allowed, in a task where another call pauses for approval: it waits, and runs when the node is resumed. */
 function heldInTask(context: CallContext): ToolMessage {
   return denial(
@@ -645,8 +672,6 @@ function denyFromServer(context: CallContext, decision: Decision): ToolMessage {
 interface ExecuteOptions {
   readonly decision: 'allow' | 'step_up';
   readonly record: boolean;
-  /** Put the run in the function's config, for `gatewayCallContext`. */
-  readonly handOffRun?: boolean;
   readonly runId: string | undefined;
   readonly decisionPolicy: Decision['policy'];
   readonly approvalId?: string;
@@ -668,14 +693,12 @@ async function execute(
   let failed = false;
   try {
     // The arguments that were decided, approved and consumed are the ones the tool is handed.
-    // A gateway-executed tool's function is handed the run it names to the gateway (`gatewayCallContext`).
-    const invokeConfig =
-      (env.gateway || options.handOffRun === true) && options.runId !== undefined
-        ? {
-            ...config,
-            configurable: { ...config.configurable, [EXTERNAL_RUN_ID_KEY]: options.runId },
-          }
-        : config;
+    // A declared gateway tool's function is handed the run it names to the gateway (`gatewayCallContext`);
+    // whatever the invoker placed under that key is removed first, for every tool.
+    const invokeConfig: ToolConfig = {
+      ...config,
+      configurable: configurableFor(config.configurable, env.gateway ? options.runId : undefined),
+    };
     result = await env.handler(context.args, invokeConfig);
   } catch (error) {
     if (isGraphInterrupt(error)) throw error;
