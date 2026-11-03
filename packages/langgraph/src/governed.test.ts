@@ -529,7 +529,7 @@ describe('governed: the decision table', () => {
       const errors: string[] = [];
       const { h, counters, graph } = await setup(
         {
-          governance: { onError: (e) => errors.push(e.code) },
+          governance: { onError: (e) => errors.push(`${e.code}: ${e.message}`) },
           script: [ask(call('c1', 'create_issue', { title: 'x' }))],
         },
         ['createIssue']
@@ -546,9 +546,11 @@ describe('governed: the decision table', () => {
       const [denied] = toolMessages(await messagesOf(graph));
       expect(denialCodeOf(denied)).toBe('not_locally_executable');
       expect(textOf(denied)).toContain('executed by the deployment');
-      expect(errors).toEqual(['not_locally_executable']);
-      const [report] = errors;
-      expect(report).toBeDefined();
+      expect(errors).toHaveLength(1);
+      const [report = ''] = errors;
+      expect(report).toMatch(/^not_locally_executable: /);
+      expect(report).toMatch(/answered allow with an approval handle/);
+      expect(report).toMatch(/left as it is/);
     });
 
     it('withdraws the approval when this call opened it', async () => {

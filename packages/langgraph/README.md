@@ -330,8 +330,10 @@ run header and the approved arguments, and admits the call once.
     gateway instead of wrapping a function for it, or declare it gateway-executed (`gatewayTools` /
     `executedBy: 'gateway'`, see [Tools the gateway executes](#tools-the-gateway-executes)). The report and the denial say what became of the approval,
     from the withdraw's result: withdrawn, still open because the withdraw failed (the failure is reported
-    too), or only matched. When the gateway has admitted an approved call itself (the decision is `allow` and
-    carries the approval), the adapter runs no consume and appends no record. A Resumption with no
+    too), or only matched. An `allow` that carries an approval handle is the gateway admitting the call by an
+    approval it holds; on a tool that is not declared gateway-executed it is refused `not_locally_executable`
+    the same way (the approval has been answered, so nothing is withdrawn unless this call opened it). Only
+    for a declared tool does the adapter run the function on it, with no consume and no record. A Resumption with no
     `resume_token` for a call the gateway did not admit is refused when the node re-enters: the adapter has
     nothing to consume, so it denies the call rather than run it. That is the second line of defence.
 12. **An expired or withdrawn approval is matched to its thread by its continuation.** The server echoes the
