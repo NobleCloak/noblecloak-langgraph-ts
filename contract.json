@@ -1,13 +1,12 @@
 {
-  "phase": "vendored",
+  "phase": "registry",
+  "contractRevision": "contract-v1-rev15",
   "packages": {
     "@noblecloak/client": {
-      "version": "0.10.0",
-      "tarball": "vendor/noblecloak-client-0.10.0.tgz"
+      "version": "0.11.0"
     },
     "@noblecloak/spec": {
-      "version": "0.9.0",
-      "tarball": "vendor/noblecloak-spec-0.9.0.tgz"
+      "version": "0.10.0"
     }
   }
 }

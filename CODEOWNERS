@@ -1,7 +1,7 @@
 # Default owner for everything in the repository.
 *                @dmcnelis
 
-# The contract packages this adapter is built against: the vendored tarballs, their checksums and the record
-# of the pair.
-/vendor/         @dmcnelis
+# The record of the contract packages this adapter is built against, and the registry mapping they install
+# through.
 /contract.json   @dmcnelis
+/.npmrc          @dmcnelis

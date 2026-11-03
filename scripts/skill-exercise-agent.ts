@@ -1,7 +1,7 @@
 /**
  * The acceptance run of the langgraph skill (`bun run exercise:skill`, that is `bun scripts/skill-exercise-agent.ts
- * [--keep] [--skip-e2e]`): a Node project, no browser. It builds and packs the adapter, takes the contract client
- * from the vendored tarball the root `overrides` pin, scaffolds a minimal LangGraph project, applies the skill's script, writes in place
+ * [--keep] [--skip-e2e]`): a Node project, no browser. It builds and packs the adapter, fetches the contract client
+ * from the package registry at the version `contract.json` records, scaffolds a minimal LangGraph project, applies the skill's script, writes in place
  * of the model the files its steps produce (`skill-exercise-agent-fixtures.ts`), then runs `propose.mjs` against
  * `nc-mock`, approves the proposal as the mock's administrator and checks what the deployment did with it. Then it
  * runs the agent and the skill's own worker as separate processes: the agent pauses on the refund, the worker
@@ -9,18 +9,12 @@
  * real service-principal credential against a stub token endpoint and are given no pasted token, so the run also
  * proves the generated governance module authenticates from that credential.
  *
- * Network: the package registry, and whatever the install script of `better-sqlite3` downloads (its prebuilt binary).
+ * Network: the public npm registry, the organisation's package registry for the contract client (`npm pack`, with
+ * the token from `NODE_AUTH_TOKEN`), and whatever the install script of `better-sqlite3` downloads (its prebuilt
+ * binary).
  */
 import { spawnSync } from 'node:child_process';
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -53,9 +47,8 @@ import {
 } from './skill-exercise-agent-support.js';
 import type { Json, Running, TokenEndpoint } from './skill-exercise-agent-support.js';
 import {
-  contractVersions,
+  collectTarballs,
   listTemplateFiles,
-  pinContractDependencies,
   run,
   settleReport,
   tarballSources,
@@ -94,13 +87,9 @@ export async function exerciseAgent(
       run('bun', ['run', 'build'], root);
       run('bun', ['run', 'pack:all'], root);
       mkdirSync(tarballs);
-      const sources = tarballSources(root, shape.rootPackage);
-      for (const source of sources) cpSync(source.from, join(tarballs, source.file));
-      // The packed adapter names the vendored client by a path into this repository; the project installs it
-      // by version, as it would from a registry, and `apply.mjs` points that version at the client tarball.
-      const adapter = sources.find((source) => source.name === shape.rootPackage);
-      if (adapter === undefined) throw new Error(`no tarball for ${shape.rootPackage}`);
-      pinContractDependencies(join(tarballs, adapter.file), contractVersions(root));
+      // The packed adapter names the client by its exact version; the client tarball comes from the package
+      // registry at the version contract.json records, and `apply.mjs` points that version at it.
+      collectTarballs(root, tarballSources(root, shape.rootPackage), tarballs);
     });
     await step('scaffold a minimal LangGraph project', () => {
       mkdirSync(join(project, 'src'), { recursive: true });

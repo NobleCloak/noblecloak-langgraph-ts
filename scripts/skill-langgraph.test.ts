@@ -48,10 +48,9 @@ import {
   until,
 } from './skill-exercise-agent-support.js';
 import {
+  collectTarballs,
   contractVersions,
   listTemplateFiles,
-  overriddenTarball,
-  pinContractDependencies,
   tarballFile,
   tarballSources,
 } from './skill-exercise-common.js';
@@ -98,49 +97,60 @@ describe('the skill in the exercise', () => {
     expect(SKILLS.langgraph.rootPackage).toBe('@noblecloak/langgraph');
   });
 
-  it('installs the adapter as packed and the contract client as the vendored tarball the root pins', () => {
+  it('installs the adapter as packed and the contract client from the registry at the recorded version', () => {
     const sources = tarballSources(ROOT, SKILLS.langgraph.rootPackage);
-    expect(sources.map((source) => source.name)).toEqual([
-      '@noblecloak/client',
-      '@noblecloak/langgraph',
-    ]);
     const adapter = JSON.parse(
       readFileSync(join(ROOT, 'packages/langgraph/package.json'), 'utf8')
     ) as {
       version: string;
     };
-    expect(sources.find((source) => source.name === '@noblecloak/langgraph')).toEqual({
-      name: '@noblecloak/langgraph',
-      file: tarballFile('@noblecloak/langgraph', adapter.version),
-      from: join(ROOT, 'artifacts', tarballFile('@noblecloak/langgraph', adapter.version)),
+    expect(contractVersions(ROOT)).toEqual({
+      '@noblecloak/client': '0.11.0',
+      '@noblecloak/spec': '0.10.0',
     });
-    const client = sources.find((source) => source.name === '@noblecloak/client');
-    expect(client?.from).toBe(overriddenTarball(ROOT, '@noblecloak/client'));
-    expect(client?.file).toMatch(/^noblecloak-client-\d.*\.tgz$/);
-    expect(existsSync(client?.from ?? '')).toBe(true);
+    expect(sources).toEqual([
+      {
+        kind: 'registry',
+        name: '@noblecloak/client',
+        file: 'noblecloak-client-0.11.0.tgz',
+        version: '0.11.0',
+      },
+      {
+        kind: 'packed',
+        name: '@noblecloak/langgraph',
+        file: tarballFile('@noblecloak/langgraph', adapter.version),
+        from: join(ROOT, 'artifacts', tarballFile('@noblecloak/langgraph', adapter.version)),
+      },
+    ]);
   });
 
-  it('refuses a contract dependency the root does not pin to a tarball', () => {
+  it('refuses a contract dependency contract.json does not record, or names at another version', () => {
     const root = mkdtempSync(join(tmpdir(), 'tarball-sources-'));
     try {
       mkdirSync(join(root, 'packages/a'), { recursive: true });
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
       writeFileSync(
-        join(root, 'package.json'),
-        JSON.stringify({
-          workspaces: ['packages/*'],
-          overrides: { '@noblecloak/client': '0.10.0' },
-        })
+        join(root, 'contract.json'),
+        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.11.0' } } })
       );
-      writeFileSync(
-        join(root, 'packages/a/package.json'),
-        JSON.stringify({
-          name: '@noblecloak/a',
-          version: '1.0.0',
-          dependencies: { '@noblecloak/client': '0.10.0' },
-        })
-      );
+      const manifest = (dependencies: Record<string, string>): void => {
+        writeFileSync(
+          join(root, 'packages/a/package.json'),
+          JSON.stringify({ name: '@noblecloak/a', version: '1.0.0', dependencies })
+        );
+      };
+      manifest({ '@noblecloak/client': '0.11.0', 'plain-lib': '1.2.3' });
+      expect(tarballSources(root, '@noblecloak/a').map((source) => source.name)).toEqual([
+        '@noblecloak/a',
+        '@noblecloak/client',
+      ]);
+      manifest({ '@noblecloak/client': '0.10.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
-        '@noblecloak/client has no file: pin in the root overrides'
+        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.11.0'
+      );
+      manifest({ '@noblecloak/other': '1.0.0' });
+      expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
+        '@noblecloak/other is not in contract.json; nothing to install it from'
       );
       expect(() => tarballSources(root, '@noblecloak/missing')).toThrow(
         '@noblecloak/missing is not a public workspace package'
@@ -150,38 +160,67 @@ describe('the skill in the exercise', () => {
     }
   });
 
-  it("rewrites the packed adapter's file: range for the client to the contract version, and nothing else", () => {
-    const dir = mkdtempSync(join(tmpdir(), 'repin-test-'));
+  it('copies a packed tarball and fetches a registry one with npm pack, pinned to the package registry', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'collect-'));
     try {
-      mkdirSync(join(dir, 'package'));
-      writeFileSync(
-        join(dir, 'package/package.json'),
-        JSON.stringify({
-          name: '@noblecloak/langgraph',
-          dependencies: {
-            '@noblecloak/client': 'file:../../vendor/noblecloak-client-0.10.0.tgz',
-            '@noblecloak/other': 'file:../other.tgz',
-            'plain-lib': '1.2.3',
+      const packed = join(dir, 'packed.tgz');
+      writeFileSync(packed, 'packed');
+      const out = join(dir, 'out');
+      mkdirSync(out);
+      const calls: { command: string; args: readonly string[]; cwd: string }[] = [];
+      collectTarballs(
+        '/repo',
+        [
+          {
+            kind: 'packed',
+            name: '@noblecloak/langgraph',
+            file: 'noblecloak-langgraph-1.0.0.tgz',
+            from: packed,
           },
-        })
+          {
+            kind: 'registry',
+            name: '@noblecloak/client',
+            file: 'noblecloak-client-0.11.0.tgz',
+            version: '0.11.0',
+          },
+        ],
+        out,
+        (command, args, cwd) => {
+          calls.push({ command, args, cwd });
+          writeFileSync(join(out, 'noblecloak-client-0.11.0.tgz'), 'fetched');
+        }
       );
-      const tarball = join(dir, 'a.tgz');
-      expect(spawnSync('tar', ['czf', tarball, '-C', dir, 'package']).status).toBe(0);
-      expect(contractVersions(ROOT)).toEqual({
-        '@noblecloak/client': '0.10.0',
-        '@noblecloak/spec': '0.9.0',
-      });
-      expect(pinContractDependencies(tarball, contractVersions(ROOT))).toEqual([
-        '@noblecloak/client',
+      expect(readFileSync(join(out, 'noblecloak-langgraph-1.0.0.tgz'), 'utf8')).toBe('packed');
+      expect(calls).toEqual([
+        {
+          command: 'npm',
+          args: [
+            'pack',
+            '@noblecloak/client@0.11.0',
+            '--pack-destination',
+            out,
+            '--registry',
+            'https://npm.pkg.github.com',
+            '--@noblecloak:registry=https://npm.pkg.github.com',
+          ],
+          cwd: '/repo',
+        },
       ]);
-      const packed = spawnSync('tar', ['xzOf', tarball, 'package/package.json'], {
-        encoding: 'utf8',
-      });
-      expect((JSON.parse(packed.stdout) as Json).dependencies).toEqual({
-        '@noblecloak/client': '0.10.0',
-        '@noblecloak/other': 'file:../other.tgz',
-        'plain-lib': '1.2.3',
-      });
+      expect(() => {
+        collectTarballs(
+          '/repo',
+          [
+            {
+              kind: 'registry',
+              name: '@noblecloak/spec',
+              file: 'noblecloak-spec-0.10.0.tgz',
+              version: '0.10.0',
+            },
+          ],
+          out,
+          () => undefined
+        );
+      }).toThrow(`npm pack @noblecloak/spec@0.10.0 left no noblecloak-spec-0.10.0.tgz in ${out}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

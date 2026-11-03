@@ -60,10 +60,8 @@ const manifestLicenseViolations = (manifest: Record<string, unknown>): string[] 
   ...(manifest.author === 'NobleCloak' ? [] : ['author is not NobleCloak']),
 ];
 
-// An exact version, a workspace link, or one of the two vendored contract tarballs (contract.test.ts
-// checks those against contract.json and vendor/SHA256SUMS).
-const PINNED =
-  /^(\d+\.\d+\.\d+(-[\w.]+)?|workspace:.+|file:(\.{1,2}\/)+vendor\/noblecloak-(client|spec)-\d+\.\d+\.\d+\.tgz)$/;
+// An exact version or a workspace link; a file: path, even to a tarball in the tree, is not a pin.
+const PINNED = /^(\d+\.\d+\.\d+(-[\w.]+)?|workspace:.+)$/;
 /** Every dependency range in dependencies, devDependencies and optionalDependencies that is not an exact pin. */
 const pinViolations = (manifest: Record<string, unknown>): string[] =>
   ['dependencies', 'devDependencies', 'optionalDependencies'].flatMap((field) =>
@@ -128,17 +126,19 @@ describe('versions are pinned exactly', () => {
     expect(pinViolations(readJson(path))).toEqual([]);
   });
 
-  it('the pin check rejects a range, a tag, an unvendored file: link and a bad field, and accepts the allowed forms', () => {
+  it('the pin check rejects a range, a tag, a file: link and a bad field, and accepts the allowed forms', () => {
     expect(
       pinViolations({
         dependencies: {
           a: '1.2.3',
           b: 'workspace:*',
           c: '1.0.0-rc.1',
-          d: 'file:../vendor/noblecloak-client-0.1.0.tgz',
         },
       })
     ).toEqual([]);
+    expect(
+      pinViolations({ dependencies: { d: 'file:../vendor/noblecloak-client-0.1.0.tgz' } })
+    ).toEqual(['dependencies.d: file:../vendor/noblecloak-client-0.1.0.tgz']);
     expect(pinViolations({ dependencies: { a: '^1.2.3' } })).toEqual(['dependencies.a: ^1.2.3']);
     expect(pinViolations({ devDependencies: { a: 'latest' } })).toEqual([
       'devDependencies.a: latest',
