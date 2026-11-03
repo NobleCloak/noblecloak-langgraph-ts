@@ -12,6 +12,18 @@ import { join, posix } from 'node:path';
 import { GITHUB_REGISTRY, registryFlags } from './release.js';
 import { listPublicPackages } from './workspace.js';
 
+/** The variable the root `.npmrc` reads the package-registry token from. */
+export const REGISTRY_TOKEN = 'NODE_AUTH_TOKEN';
+
+/** `env` without the package-registry token. */
+export function withoutRegistryToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => name !== REGISTRY_TOKEN));
+}
+
+/**
+ * Runs a command with our environment minus the package-registry token, plus `env`; a caller that needs the
+ * token (the `npm pack` in `collectTarballs`) passes it in `env`.
+ */
 export function run(
   command: string,
   args: readonly string[],
@@ -21,7 +33,7 @@ export function run(
   const result = spawnSync(command, [...args], {
     cwd,
     stdio: 'inherit',
-    env: { ...process.env, ...env },
+    env: { ...withoutRegistryToken(process.env), ...env },
   });
   if (result.status !== 0) {
     // A command that never started (ENOENT, EACCES) has no exit status; its error says why.
@@ -128,13 +140,19 @@ export function contractVersions(root: string): Record<string, string> {
   );
 }
 
-/** Runs a command in a directory; `run` above, or a stand-in in a test. */
-export type CommandRunner = (command: string, args: readonly string[], cwd: string) => void;
+/** Runs a command in a directory with extra environment; `run` above, or a stand-in in a test. */
+export type CommandRunner = (
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv
+) => void;
 
 /**
  * Puts each source's tarball in `dir` under the name `apply.mjs --source` looks for: a packed one is copied, a
  * registry one is fetched with `npm pack <name>@<version>` from the package registry, run in `root` so the
- * repository's `.npmrc` supplies the token from `NODE_AUTH_TOKEN`. Throws when a fetch leaves no such file.
+ * repository's `.npmrc` supplies the token from `NODE_AUTH_TOKEN`. That fetch is the only command the skill run
+ * hands the token to (`run` drops it otherwise). Throws when a fetch leaves no such file.
  */
 export function collectTarballs(
   root: string,
@@ -156,9 +174,16 @@ export function collectTarballs(
         dir,
         ...registryFlags(GITHUB_REGISTRY),
       ],
-      root
+      root,
+      registryTokenEnv(process.env)
     );
     if (!existsSync(join(dir, source.file)))
       throw new Error(`npm pack ${source.name}@${source.version} left no ${source.file} in ${dir}`);
   }
+}
+
+/** The package-registry token from `env` as the one entry of an environment, or none when it is unset. */
+export function registryTokenEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const token = env[REGISTRY_TOKEN];
+  return token === undefined ? {} : { [REGISTRY_TOKEN]: token };
 }

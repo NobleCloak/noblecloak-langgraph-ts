@@ -11,7 +11,9 @@
  *
  * Network: the public npm registry, the organisation's package registry for the contract client (`npm pack`, with
  * the token from `NODE_AUTH_TOKEN`), and whatever the install script of `better-sqlite3` downloads (its prebuilt
- * binary).
+ * binary). Only that `npm pack` is given `NODE_AUTH_TOKEN`; every other command and process this run starts (the
+ * build, the scaffold's install and its install scripts, the skill, the mock, the agent and the worker) runs
+ * without it.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -52,6 +54,7 @@ import {
   run,
   settleReport,
   tarballSources,
+  withoutRegistryToken,
 } from './skill-exercise-common.js';
 
 const shape = SKILLS.langgraph;
@@ -129,7 +132,7 @@ export async function exerciseAgent(
       'node',
       [join(root, 'node_modules/@noblecloak/spec/dist/cli/nc-mock.js'), '--port', '0'],
       root,
-      process.env
+      withoutRegistryToken(process.env)
     );
     running.push(mock);
     const base = { baseUrl: '', tokens: {} as Record<string, string> };

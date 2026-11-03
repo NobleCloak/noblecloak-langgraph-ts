@@ -53,7 +53,9 @@ import {
   listTemplateFiles,
   run,
   tarballFile,
+  registryTokenEnv,
   tarballSources,
+  withoutRegistryToken,
 } from './skill-exercise-common.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -173,14 +175,61 @@ describe('the skill in the exercise', () => {
     }).toThrow(/failed \(exit null\) in .*: spawnSync no-such-command-here ENOENT/);
   });
 
+  it('runs a command without the registry token unless the caller passes it', () => {
+    const saved = process.env.NODE_AUTH_TOKEN;
+    process.env.NODE_AUTH_TOKEN = 'job-token';
+    try {
+      // Exit 4 when the child sees the token, 0 when it does not.
+      const probe = ['-e', 'process.exit(process.env.NODE_AUTH_TOKEN === undefined ? 0 : 4)'];
+      expect(() => {
+        run('node', probe, ROOT);
+      }).not.toThrow();
+      expect(() => {
+        run('node', probe, ROOT, { NODE_AUTH_TOKEN: 'job-token' });
+      }).toThrow('failed (exit 4)');
+      expect(withoutRegistryToken({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
+        PATH: '/bin',
+      });
+      expect(registryTokenEnv({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
+        NODE_AUTH_TOKEN: 't',
+      });
+      expect(registryTokenEnv({ PATH: '/bin' })).toEqual({});
+      expect(cleanEnv({}).NODE_AUTH_TOKEN).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
+    }
+  });
+
+  it('starts no process of the skill run with the registry token in its environment', () => {
+    // Importing the run would start it, so this reads its source: `process.env` only ever reaches a child through
+    // `withoutRegistryToken`, and its one direct `spawnSync` is given `cleanEnv`.
+    const source = readFileSync(join(ROOT, 'scripts/skill-exercise-agent.ts'), 'utf8');
+    const passed = source.match(/process\.env/g) ?? [];
+    const scrubbed = source.match(/withoutRegistryToken\(process\.env\)/g) ?? [];
+    expect(passed.length).toBeGreaterThan(0);
+    expect(scrubbed.length).toBe(passed.length);
+    const spawns = source.split('spawnSync(').slice(1);
+    expect(spawns.length).toBeGreaterThan(0);
+    for (const call of spawns)
+      expect(call.slice(0, call.indexOf('});'))).toContain('env: cleanEnv(');
+  });
+
   it('copies a packed tarball and fetches a registry one with npm pack, pinned to the package registry', () => {
     const dir = mkdtempSync(join(tmpdir(), 'collect-'));
+    const saved = process.env.NODE_AUTH_TOKEN;
     try {
       const packed = join(dir, 'packed.tgz');
       writeFileSync(packed, 'packed');
       const out = join(dir, 'out');
       mkdirSync(out);
-      const calls: { command: string; args: readonly string[]; cwd: string }[] = [];
+      const calls: {
+        command: string;
+        args: readonly string[];
+        cwd: string;
+        env: NodeJS.ProcessEnv;
+      }[] = [];
+      process.env.NODE_AUTH_TOKEN = 'job-token';
       collectTarballs(
         '/repo',
         [
@@ -198,8 +247,8 @@ describe('the skill in the exercise', () => {
           },
         ],
         out,
-        (command, args, cwd) => {
-          calls.push({ command, args, cwd });
+        (command, args, cwd, env) => {
+          calls.push({ command, args, cwd, env });
           writeFileSync(join(out, 'noblecloak-client-0.11.0.tgz'), 'fetched');
         }
       );
@@ -217,6 +266,8 @@ describe('the skill in the exercise', () => {
             '--@noblecloak:registry=https://npm.pkg.github.com',
           ],
           cwd: '/repo',
+          // The fetch is the one command handed the registry token.
+          env: { NODE_AUTH_TOKEN: 'job-token' },
         },
       ]);
       expect(() => {
@@ -235,6 +286,8 @@ describe('the skill in the exercise', () => {
         );
       }).toThrow(`npm pack @noblecloak/spec@0.10.0 left no noblecloak-spec-0.10.0.tgz in ${out}`);
     } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
       rmSync(dir, { recursive: true, force: true });
     }
   });
