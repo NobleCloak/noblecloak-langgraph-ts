@@ -15,6 +15,8 @@
 #
 # `pack` and `version` install the contract packages from the organisation's package registry: each holds
 # `packages: read` and hands the job token to `bun install` as NODE_AUTH_TOKEN, which the root .npmrc reads.
+# `version` also holds write scopes, so its install runs with `--ignore-scripts`: no dependency lifecycle
+# script runs with that token in its environment.
 #
 # Every job that holds a write scope checks out with `persist-credentials: false`, so the token is not left in
 # `.git/config` for dependency code to read. `changesets/action` authenticates with the token it is handed; the
@@ -85,7 +87,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
-      - run: bun install --frozen-lockfile
+      # --ignore-scripts: this job holds contents and pull-requests write, so no dependency lifecycle script
+      # runs while that token is in the environment. `changeset version` needs no built or scripted package.
+      - run: bun install --frozen-lockfile --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2

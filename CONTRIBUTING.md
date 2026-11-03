@@ -86,6 +86,8 @@ in its package settings; until it does, the install fails with 401 or 403 in CI.
 
 `.github/workflows/publish.yml` runs on every `main` push and every `v*` tag. `publish pack` builds and packs the
 tarballs as the `npm-packages` artifact; it and `publish version` hold `packages: read` for the install.
+`publish version` also holds write scopes, so it installs with `--ignore-scripts` and no dependency lifecycle
+script runs with its token in the environment.
 `publish version` opens or updates the Changesets version pull request
 and publishes nothing; it is opened with `github.token`, so no `pull_request` workflow runs on it until a
 maintainer closes and reopens it. Every job that holds a write scope checks out with

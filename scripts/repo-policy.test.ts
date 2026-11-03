@@ -498,6 +498,27 @@ const registryReadViolations = (files: Record<string, Workflow>): string[] => {
   return found;
 };
 
+/**
+ * `<file>:<job>:<run>` for every `bun install` step that does not pass `--ignore-scripts` inside a job that
+ * holds any write scope (its own block, or the workflow's when the job has none; `write-all` counts): a
+ * dependency lifecycle script there would run where the write-scoped token can be handed to it, as
+ * `NODE_AUTH_TOKEN` is in `publish version`.
+ */
+const scriptedTokenInstalls = (files: Record<string, Workflow>): string[] => {
+  const found: string[] = [];
+  for (const [file, workflow] of Object.entries(files)) {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (!holdsWrite(job.permissions ?? workflow.permissions)) continue;
+      for (const step of job.steps ?? []) {
+        const run = (step.run ?? '').trim();
+        if (!/^bun install\b/.test(run)) continue;
+        if (!/(^|\s)--ignore-scripts(\s|$)/.test(run)) found.push(`${file}:${name}:${run}`);
+      }
+    }
+  }
+  return found;
+};
+
 const INSTALL_OR_BUILD =
   /\b(bun|npm|pnpm|yarn)\s+(install|i|ci|add)\b|\bbun\s+x\b|\bbunx\b|\bnpx\b|\bturbo\b|\brun\s+(build|pack:all)\b/;
 
@@ -898,7 +919,7 @@ describe('workflows', () => {
       delete step.env;
     }
     const wrongToken = job(noToken, 'publish.yml', 'version').steps?.find(
-      (s) => s.run?.trim() === 'bun install --frozen-lockfile'
+      (s) => s.run?.trim() === 'bun install --frozen-lockfile --ignore-scripts'
     );
     if (wrongToken === undefined) throw new Error('version has no install');
     wrongToken.env = { NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}' };
@@ -906,7 +927,53 @@ describe('workflows', () => {
       'ci.yml:gate:bun install --frozen-lockfile',
       'ci.yml:skill:bun run exercise:skill',
       'publish.yml:pack:bun install --frozen-lockfile',
+      'publish.yml:version:bun install --frozen-lockfile --ignore-scripts',
+    ]);
+  });
+
+  it('a job that holds a write scope installs only under --ignore-scripts', () => {
+    expect(scriptedTokenInstalls(allWorkflows)).toEqual([]);
+    const versionInstall = (files: Record<string, Workflow>): Step => {
+      const step = files['publish.yml']?.jobs.version?.steps?.find((s) =>
+        s.run?.trim().startsWith('bun install')
+      );
+      if (step === undefined) throw new Error('version has no install');
+      return step;
+    };
+    expect(versionInstall(allWorkflows).run?.trim()).toBe(
+      'bun install --frozen-lockfile --ignore-scripts'
+    );
+
+    const scripted = structuredClone(allWorkflows);
+    versionInstall(scripted).run = 'bun install --frozen-lockfile';
+    expect(scriptedTokenInstalls(scripted)).toEqual([
       'publish.yml:version:bun install --frozen-lockfile',
+    ]);
+
+    // A read-only job (pack) may run scripts; giving it a write scope makes the same step a violation.
+    const writingPack = structuredClone(allWorkflows);
+    const pack = writingPack['publish.yml']?.jobs.pack;
+    if (pack === undefined) throw new Error('pack missing');
+    pack.permissions = { contents: 'write', packages: 'read' };
+    expect(scriptedTokenInstalls(writingPack)).toEqual([
+      'publish.yml:pack:bun install --frozen-lockfile',
+    ]);
+
+    // A job with no block of its own takes the workflow's, so a write-all workflow makes pack's step a violation.
+    const inherited = structuredClone(allWorkflows);
+    const publishFile = inherited['publish.yml'];
+    if (publishFile?.jobs.pack === undefined) throw new Error('pack missing');
+    delete publishFile.jobs.pack.permissions;
+    publishFile.permissions = 'write-all';
+    expect(scriptedTokenInstalls(inherited)).toEqual([
+      'publish.yml:pack:bun install --frozen-lockfile',
+    ]);
+
+    // A flag that only starts with --ignore-scripts is not the flag.
+    const lookalike = structuredClone(allWorkflows);
+    versionInstall(lookalike).run = 'bun install --frozen-lockfile --ignore-scripts-x';
+    expect(scriptedTokenInstalls(lookalike)).toEqual([
+      'publish.yml:version:bun install --frozen-lockfile --ignore-scripts-x',
     ]);
   });
 
