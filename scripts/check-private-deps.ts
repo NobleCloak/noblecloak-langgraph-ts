@@ -2,7 +2,9 @@
  * Private-dependency guard. Walks every package.json, .npmrc, bunfig.toml and bun.lock in the tree
  * and fails when the tree names a source a stranger could not install from, or a credential. It names no scope:
  * the one scope that may map to the package registry is the scope of the packages `contract.json` records (when
- * they share one), read from the scanned tree.
+ * they share one), read from the scanned tree. The guard alone accepts whatever scope that is;
+ * scripts/contract.test.ts pins it to the scope of the contract pair (`CONTRACT_PACKAGES` in scripts/contract.ts),
+ * and `checkContract` names a contract.json that lists any other packages, so a changed scope fails the tests.
  *
  * - a dependency (any of the four dependency fields, including npm: aliases) whose specifier is not a
  *   registry version or range: a URL other than `registry.npmjs.org`, a git or `github:` shorthand, or any

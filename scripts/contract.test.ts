@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { CONTRACT_CONSUMERS, checkContract } from './contract.js';
+import { contractScope } from './check-private-deps.js';
+import { CONTRACT_CONSUMERS, CONTRACT_PACKAGES, checkContract } from './contract.js';
 import { listWorkspacePackages } from './workspace.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -40,6 +41,37 @@ describe('the contract pair of this repository', () => {
       expect(block[consumer.name], `${consumer.dir} ${consumer.field}`).toBe(
         versions[consumer.name]
       );
+    }
+  });
+});
+
+// The guard names no scope and allows whichever one contract.json records. This pins that scope to the
+// contract pair's, so editing contract.json (and the root .npmrc) to another scope fails the suite even
+// though `bun run guard` alone would accept it.
+describe('the scope the private-dependency guard allows', () => {
+  it('is @noblecloak, the scope of the contract pair, and the one the root .npmrc maps', () => {
+    expect(contractScope(ROOT)).toBe('@noblecloak');
+    for (const name of CONTRACT_PACKAGES) expect(name.startsWith('@noblecloak/'), name).toBe(true);
+    expect(readFileSync(join(ROOT, '.npmrc'), 'utf8').split('\n')[0]).toBe(
+      '@noblecloak:registry=https://npm.pkg.github.com'
+    );
+  });
+
+  it('follows contract.json, so a changed scope is stopped by checkContract, not by the guard', () => {
+    const tree = mkdtempSync(join(tmpdir(), 'contract-scope-'));
+    try {
+      write(tree, 'contract.json', {
+        phase: 'registry',
+        contractRevision: 'contract-v1-rev15',
+        packages: { '@other/client': { version: '0.11.0' }, '@other/spec': { version: '0.10.0' } },
+      });
+      write(tree, 'package.json', { name: 'x', private: true, license: 'Apache-2.0' });
+      expect(contractScope(tree)).toBe('@other');
+      expect(checkContract(tree)).toContain(
+        'contract.json: lists @other/client, @other/spec, not @noblecloak/client, @noblecloak/spec'
+      );
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
     }
   });
 });
