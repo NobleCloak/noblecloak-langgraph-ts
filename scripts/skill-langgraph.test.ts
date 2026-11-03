@@ -51,6 +51,7 @@ import {
   collectTarballs,
   contractVersions,
   listTemplateFiles,
+  run,
   tarballFile,
   tarballSources,
 } from './skill-exercise-common.js';
@@ -158,6 +159,18 @@ describe('the skill in the exercise', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('runs a command, and says the command, the exit status and the directory when it fails', () => {
+    expect(() => {
+      run('node', ['-e', 'process.exit(0)'], ROOT);
+    }).not.toThrow();
+    expect(() => {
+      run('node', ['-e', 'process.exit(3)'], ROOT);
+    }).toThrow(`node -e process.exit(3) failed (exit 3) in ${ROOT}`);
+    expect(() => {
+      run('no-such-command-here', [], ROOT);
+    }).toThrow(/failed \(exit null\) in .*: spawnSync no-such-command-here ENOENT/);
   });
 
   it('copies a packed tarball and fetches a registry one with npm pack, pinned to the package registry', () => {
