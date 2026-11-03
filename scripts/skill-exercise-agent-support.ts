@@ -9,6 +9,8 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { REGISTRY_TOKEN } from './skill-exercise-common.js';
+
 export type Json = Record<string, unknown>;
 
 /** A generated service-principal credential whose token endpoint is `tokenEndpoint` (the shape the client reads). */
@@ -139,9 +141,12 @@ export function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`assertion failed: ${message}`);
 }
 
-/** The environment of a child process: ours without any pasted token, so only the credential can authenticate. */
+/**
+ * The environment of a child process: ours without any pasted token, so only the credential can authenticate,
+ * and without the package-registry token, which only the client's `npm pack` needs.
+ */
 export function cleanEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
-  const pasted = ['NC_TOKEN', 'NC_PROPOSER_TOKEN'];
+  const pasted = ['NC_TOKEN', 'NC_PROPOSER_TOKEN', REGISTRY_TOKEN];
   const inherited = Object.entries(process.env).filter(([name]) => !pasted.includes(name));
   return { ...Object.fromEntries(inherited), ...extra };
 }

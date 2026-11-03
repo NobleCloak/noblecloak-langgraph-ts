@@ -1,17 +1,29 @@
 /**
  * What the langgraph skill's acceptance run (`skill-exercise-agent.ts`) and its test (`skill-langgraph.test.ts`)
- * share: running a command, writing the wall-time report, listing a template tree and choosing the tarballs the
- * scaffolded project installs. `run`, `settleReport` and `listTemplateFiles` are copied from the spec
- * repository's `skill-exercise.ts` at 0620a1d; the tarball helpers are new here. The two repositories are not
- * kept in step.
+ * share: running a command, writing the wall-time report, listing a template tree and choosing and collecting
+ * the tarballs the scaffolded project installs. `run`, `settleReport` and `listTemplateFiles` are copied from the
+ * spec repository's `skill-exercise.ts` at 0620a1d; the tarball helpers are new here. The two repositories are
+ * not kept in step.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, posix, resolve } from 'node:path';
+import { cpSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, posix } from 'node:path';
 
+import { GITHUB_REGISTRY, registryFlags } from './release.js';
 import { listPublicPackages } from './workspace.js';
 
+/** The variable the root `.npmrc` reads the package-registry token from. */
+export const REGISTRY_TOKEN = 'NODE_AUTH_TOKEN';
+
+/** `env` without the package-registry token. */
+export function withoutRegistryToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => name !== REGISTRY_TOKEN));
+}
+
+/**
+ * Runs a command with our environment minus the package-registry token, plus `env`; a caller that needs the
+ * token (the `npm pack` in `collectTarballs`) passes it in `env`.
+ */
 export function run(
   command: string,
   args: readonly string[],
@@ -21,7 +33,7 @@ export function run(
   const result = spawnSync(command, [...args], {
     cwd,
     stdio: 'inherit',
-    env: { ...process.env, ...env },
+    env: { ...withoutRegistryToken(process.env), ...env },
   });
   if (result.status !== 0) {
     // A command that never started (ENOENT, EACCES) has no exit status; its error says why.
@@ -58,31 +70,31 @@ export function tarballFile(name: string, version: string): string {
   return `${name.replace('@', '').replace('/', '-')}-${version}.tgz`;
 }
 
-/** A tarball the project installs, and where this run copies it from. */
-export interface TarballSource {
-  readonly name: string;
-  /** The file name `apply.mjs --source` looks for (`noblecloak-<package>-<version>.tgz`). */
-  readonly file: string;
-  /** Absolute path of the tarball to copy. */
-  readonly from: string;
-}
-
 /**
- * The `file:` pin the root `overrides` give a contract package, as an absolute path (`file:./vendor/x.tgz`), or
- * undefined when the root pins that package otherwise.
+ * A tarball the project installs: the package `pack:all` packed into `artifacts/`, or a contract package this run
+ * fetches from the package registry at the version `contract.json` records.
  */
-export function overriddenTarball(root: string, name: string): string | undefined {
-  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
-    overrides?: Record<string, string>;
-  };
-  const spec = manifest.overrides?.[name];
-  return spec?.startsWith('file:') === true ? resolve(root, spec.slice('file:'.length)) : undefined;
-}
+export type TarballSource =
+  | {
+      readonly kind: 'packed';
+      readonly name: string;
+      /** The file name `apply.mjs --source` looks for (`noblecloak-<package>-<version>.tgz`). */
+      readonly file: string;
+      /** Absolute path of the tarball to copy. */
+      readonly from: string;
+    }
+  | {
+      readonly kind: 'registry';
+      readonly name: string;
+      readonly file: string;
+      readonly version: string;
+    };
 
 /**
  * The tarballs the skill installs, sorted by name: `rootPackage` as `pack:all` packed it into `artifacts/`, and
- * each other `@noblecloak/*` entry in its `dependencies` as the tarball the root `overrides` pin it to (the
- * vendored contract package). A dependency with no such pin throws, because there is nothing to install it from.
+ * each other `@noblecloak/*` entry in its `dependencies` from the registry, at the version `contract.json` records.
+ * A dependency that `contract.json` does not record, or that the manifest names at another version, throws:
+ * the tarball the project installs would not be the one the adapter declares.
  */
 export function tarballSources(root: string, rootPackage: string): TarballSource[] {
   const pkg = listPublicPackages(root).find((candidate) => candidate.name === rootPackage);
@@ -90,21 +102,30 @@ export function tarballSources(root: string, rootPackage: string): TarballSource
   const manifest = JSON.parse(readFileSync(join(pkg.dir, 'package.json'), 'utf8')) as {
     dependencies?: Record<string, string>;
   };
+  const versions = contractVersions(root);
   const sources: TarballSource[] = [
     {
+      kind: 'packed',
       name: pkg.name,
       file: tarballFile(pkg.name, pkg.version),
       from: join(root, 'artifacts', tarballFile(pkg.name, pkg.version)),
     },
   ];
-  for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+  for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
     if (!dependency.startsWith('@noblecloak/')) continue;
-    const from = overriddenTarball(root, dependency);
-    if (from === undefined)
+    const version = versions[dependency];
+    if (version === undefined)
+      throw new Error(`${dependency} is not in contract.json; nothing to install it from`);
+    if (range !== version)
       throw new Error(
-        `${dependency} has no file: pin in the root overrides; nothing to install it from`
+        `${rootPackage} names ${dependency}@${range}, but contract.json records ${version}`
       );
-    sources.push({ name: dependency, file: from.slice(from.lastIndexOf('/') + 1), from });
+    sources.push({
+      kind: 'registry',
+      name: dependency,
+      file: tarballFile(dependency, version),
+      version,
+    });
   }
   return sources.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -119,35 +140,50 @@ export function contractVersions(root: string): Record<string, string> {
   );
 }
 
+/** Runs a command in a directory with extra environment; `run` above, or a stand-in in a test. */
+export type CommandRunner = (
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv
+) => void;
+
 /**
- * Rewrites, in place, the `file:` ranges a packed tarball declares for the contract packages to their exact
- * versions, which is what a tarball built against registry versions carries. A `file:../../vendor/...` range
- * points into this repository, and `bun add` of the tarball fails on it from a project outside. Any other
- * dependency is left as packed. Returns the names it rewrote.
+ * Puts each source's tarball in `dir` under the name `apply.mjs --source` looks for: a packed one is copied, a
+ * registry one is fetched with `npm pack <name>@<version>` from the package registry, run in `root` so the
+ * repository's `.npmrc` supplies the token from `NODE_AUTH_TOKEN`. That fetch is the only command the skill run
+ * hands the token to (`run` drops it otherwise). Throws when a fetch leaves no such file.
  */
-export function pinContractDependencies(
-  tarball: string,
-  versions: Readonly<Record<string, string>>
-): string[] {
-  const staging = mkdtempSync(join(tmpdir(), 'repin-'));
-  try {
-    run('tar', ['xzf', tarball, '-C', staging], staging);
-    const file = join(staging, 'package', 'package.json');
-    const manifest = JSON.parse(readFileSync(file, 'utf8')) as {
-      dependencies?: Record<string, string>;
-    };
-    const rewritten: string[] = [];
-    for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
-      const version = versions[name];
-      if (version !== undefined && range.startsWith('file:')) {
-        manifest.dependencies = { ...manifest.dependencies, [name]: version };
-        rewritten.push(name);
-      }
+export function collectTarballs(
+  root: string,
+  sources: readonly TarballSource[],
+  dir: string,
+  runner: CommandRunner = run
+): void {
+  for (const source of sources) {
+    if (source.kind === 'packed') {
+      cpSync(source.from, join(dir, source.file));
+      continue;
     }
-    writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
-    run('tar', ['czf', tarball, '-C', staging, 'package'], staging);
-    return rewritten;
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+    runner(
+      'npm',
+      [
+        'pack',
+        `${source.name}@${source.version}`,
+        '--pack-destination',
+        dir,
+        ...registryFlags(GITHUB_REGISTRY),
+      ],
+      root,
+      registryTokenEnv(process.env)
+    );
+    if (!existsSync(join(dir, source.file)))
+      throw new Error(`npm pack ${source.name}@${source.version} left no ${source.file} in ${dir}`);
   }
+}
+
+/** The package-registry token from `env` as the one entry of an environment, or none when it is unset. */
+export function registryTokenEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const token = env[REGISTRY_TOKEN];
+  return token === undefined ? {} : { [REGISTRY_TOKEN]: token };
 }

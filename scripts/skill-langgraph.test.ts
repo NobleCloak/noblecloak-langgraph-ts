@@ -48,12 +48,14 @@ import {
   until,
 } from './skill-exercise-agent-support.js';
 import {
+  collectTarballs,
   contractVersions,
   listTemplateFiles,
-  overriddenTarball,
-  pinContractDependencies,
+  run,
   tarballFile,
+  registryTokenEnv,
   tarballSources,
+  withoutRegistryToken,
 } from './skill-exercise-common.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -98,49 +100,60 @@ describe('the skill in the exercise', () => {
     expect(SKILLS.langgraph.rootPackage).toBe('@noblecloak/langgraph');
   });
 
-  it('installs the adapter as packed and the contract client as the vendored tarball the root pins', () => {
+  it('installs the adapter as packed and the contract client from the registry at the recorded version', () => {
     const sources = tarballSources(ROOT, SKILLS.langgraph.rootPackage);
-    expect(sources.map((source) => source.name)).toEqual([
-      '@noblecloak/client',
-      '@noblecloak/langgraph',
-    ]);
     const adapter = JSON.parse(
       readFileSync(join(ROOT, 'packages/langgraph/package.json'), 'utf8')
     ) as {
       version: string;
     };
-    expect(sources.find((source) => source.name === '@noblecloak/langgraph')).toEqual({
-      name: '@noblecloak/langgraph',
-      file: tarballFile('@noblecloak/langgraph', adapter.version),
-      from: join(ROOT, 'artifacts', tarballFile('@noblecloak/langgraph', adapter.version)),
+    expect(contractVersions(ROOT)).toEqual({
+      '@noblecloak/client': '0.11.0',
+      '@noblecloak/spec': '0.10.0',
     });
-    const client = sources.find((source) => source.name === '@noblecloak/client');
-    expect(client?.from).toBe(overriddenTarball(ROOT, '@noblecloak/client'));
-    expect(client?.file).toMatch(/^noblecloak-client-\d.*\.tgz$/);
-    expect(existsSync(client?.from ?? '')).toBe(true);
+    expect(sources).toEqual([
+      {
+        kind: 'registry',
+        name: '@noblecloak/client',
+        file: 'noblecloak-client-0.11.0.tgz',
+        version: '0.11.0',
+      },
+      {
+        kind: 'packed',
+        name: '@noblecloak/langgraph',
+        file: tarballFile('@noblecloak/langgraph', adapter.version),
+        from: join(ROOT, 'artifacts', tarballFile('@noblecloak/langgraph', adapter.version)),
+      },
+    ]);
   });
 
-  it('refuses a contract dependency the root does not pin to a tarball', () => {
+  it('refuses a contract dependency contract.json does not record, or names at another version', () => {
     const root = mkdtempSync(join(tmpdir(), 'tarball-sources-'));
     try {
       mkdirSync(join(root, 'packages/a'), { recursive: true });
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
       writeFileSync(
-        join(root, 'package.json'),
-        JSON.stringify({
-          workspaces: ['packages/*'],
-          overrides: { '@noblecloak/client': '0.10.0' },
-        })
+        join(root, 'contract.json'),
+        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.11.0' } } })
       );
-      writeFileSync(
-        join(root, 'packages/a/package.json'),
-        JSON.stringify({
-          name: '@noblecloak/a',
-          version: '1.0.0',
-          dependencies: { '@noblecloak/client': '0.10.0' },
-        })
-      );
+      const manifest = (dependencies: Record<string, string>): void => {
+        writeFileSync(
+          join(root, 'packages/a/package.json'),
+          JSON.stringify({ name: '@noblecloak/a', version: '1.0.0', dependencies })
+        );
+      };
+      manifest({ '@noblecloak/client': '0.11.0', 'plain-lib': '1.2.3' });
+      expect(tarballSources(root, '@noblecloak/a').map((source) => source.name)).toEqual([
+        '@noblecloak/a',
+        '@noblecloak/client',
+      ]);
+      manifest({ '@noblecloak/client': '0.10.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
-        '@noblecloak/client has no file: pin in the root overrides'
+        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.11.0'
+      );
+      manifest({ '@noblecloak/other': '1.0.0' });
+      expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
+        '@noblecloak/other is not in contract.json; nothing to install it from'
       );
       expect(() => tarballSources(root, '@noblecloak/missing')).toThrow(
         '@noblecloak/missing is not a public workspace package'
@@ -150,39 +163,131 @@ describe('the skill in the exercise', () => {
     }
   });
 
-  it("rewrites the packed adapter's file: range for the client to the contract version, and nothing else", () => {
-    const dir = mkdtempSync(join(tmpdir(), 'repin-test-'));
+  it('runs a command, and says the command, the exit status and the directory when it fails', () => {
+    expect(() => {
+      run('node', ['-e', 'process.exit(0)'], ROOT);
+    }).not.toThrow();
+    expect(() => {
+      run('node', ['-e', 'process.exit(3)'], ROOT);
+    }).toThrow(`node -e process.exit(3) failed (exit 3) in ${ROOT}`);
+    expect(() => {
+      run('no-such-command-here', [], ROOT);
+    }).toThrow(/failed \(exit null\) in .*: spawnSync no-such-command-here ENOENT/);
+  });
+
+  it('runs a command without the registry token unless the caller passes it', () => {
+    const saved = process.env.NODE_AUTH_TOKEN;
+    process.env.NODE_AUTH_TOKEN = 'job-token';
     try {
-      mkdirSync(join(dir, 'package'));
-      writeFileSync(
-        join(dir, 'package/package.json'),
-        JSON.stringify({
-          name: '@noblecloak/langgraph',
-          dependencies: {
-            '@noblecloak/client': 'file:../../vendor/noblecloak-client-0.10.0.tgz',
-            '@noblecloak/other': 'file:../other.tgz',
-            'plain-lib': '1.2.3',
-          },
-        })
-      );
-      const tarball = join(dir, 'a.tgz');
-      expect(spawnSync('tar', ['czf', tarball, '-C', dir, 'package']).status).toBe(0);
-      expect(contractVersions(ROOT)).toEqual({
-        '@noblecloak/client': '0.10.0',
-        '@noblecloak/spec': '0.9.0',
+      // Exit 4 when the child sees the token, 0 when it does not.
+      const probe = ['-e', 'process.exit(process.env.NODE_AUTH_TOKEN === undefined ? 0 : 4)'];
+      expect(() => {
+        run('node', probe, ROOT);
+      }).not.toThrow();
+      expect(() => {
+        run('node', probe, ROOT, { NODE_AUTH_TOKEN: 'job-token' });
+      }).toThrow('failed (exit 4)');
+      expect(withoutRegistryToken({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
+        PATH: '/bin',
       });
-      expect(pinContractDependencies(tarball, contractVersions(ROOT))).toEqual([
-        '@noblecloak/client',
-      ]);
-      const packed = spawnSync('tar', ['xzOf', tarball, 'package/package.json'], {
-        encoding: 'utf8',
+      expect(registryTokenEnv({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
+        NODE_AUTH_TOKEN: 't',
       });
-      expect((JSON.parse(packed.stdout) as Json).dependencies).toEqual({
-        '@noblecloak/client': '0.10.0',
-        '@noblecloak/other': 'file:../other.tgz',
-        'plain-lib': '1.2.3',
-      });
+      expect(registryTokenEnv({ PATH: '/bin' })).toEqual({});
+      expect(cleanEnv({}).NODE_AUTH_TOKEN).toBeUndefined();
     } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
+    }
+  });
+
+  it('starts no process of the skill run with the registry token in its environment', () => {
+    // Importing the run would start it, so this reads its source: `process.env` only ever reaches a child through
+    // `withoutRegistryToken`, and its one direct `spawnSync` is given `cleanEnv`.
+    const source = readFileSync(join(ROOT, 'scripts/skill-exercise-agent.ts'), 'utf8');
+    const passed = source.match(/process\.env/g) ?? [];
+    const scrubbed = source.match(/withoutRegistryToken\(process\.env\)/g) ?? [];
+    expect(passed.length).toBeGreaterThan(0);
+    expect(scrubbed.length).toBe(passed.length);
+    const spawns = source.split('spawnSync(').slice(1);
+    expect(spawns.length).toBeGreaterThan(0);
+    for (const call of spawns)
+      expect(call.slice(0, call.indexOf('});'))).toContain('env: cleanEnv(');
+  });
+
+  it('copies a packed tarball and fetches a registry one with npm pack, pinned to the package registry', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'collect-'));
+    const saved = process.env.NODE_AUTH_TOKEN;
+    try {
+      const packed = join(dir, 'packed.tgz');
+      writeFileSync(packed, 'packed');
+      const out = join(dir, 'out');
+      mkdirSync(out);
+      const calls: {
+        command: string;
+        args: readonly string[];
+        cwd: string;
+        env: NodeJS.ProcessEnv;
+      }[] = [];
+      process.env.NODE_AUTH_TOKEN = 'job-token';
+      collectTarballs(
+        '/repo',
+        [
+          {
+            kind: 'packed',
+            name: '@noblecloak/langgraph',
+            file: 'noblecloak-langgraph-1.0.0.tgz',
+            from: packed,
+          },
+          {
+            kind: 'registry',
+            name: '@noblecloak/client',
+            file: 'noblecloak-client-0.11.0.tgz',
+            version: '0.11.0',
+          },
+        ],
+        out,
+        (command, args, cwd, env) => {
+          calls.push({ command, args, cwd, env });
+          writeFileSync(join(out, 'noblecloak-client-0.11.0.tgz'), 'fetched');
+        }
+      );
+      expect(readFileSync(join(out, 'noblecloak-langgraph-1.0.0.tgz'), 'utf8')).toBe('packed');
+      expect(calls).toEqual([
+        {
+          command: 'npm',
+          args: [
+            'pack',
+            '@noblecloak/client@0.11.0',
+            '--pack-destination',
+            out,
+            '--registry',
+            'https://npm.pkg.github.com',
+            '--@noblecloak:registry=https://npm.pkg.github.com',
+          ],
+          cwd: '/repo',
+          // The fetch is the one command handed the registry token.
+          env: { NODE_AUTH_TOKEN: 'job-token' },
+        },
+      ]);
+      expect(() => {
+        collectTarballs(
+          '/repo',
+          [
+            {
+              kind: 'registry',
+              name: '@noblecloak/spec',
+              file: 'noblecloak-spec-0.10.0.tgz',
+              version: '0.10.0',
+            },
+          ],
+          out,
+          () => undefined
+        );
+      }).toThrow(`npm pack @noblecloak/spec@0.10.0 left no noblecloak-spec-0.10.0.tgz in ${out}`);
+    } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
       rmSync(dir, { recursive: true, force: true });
     }
   });

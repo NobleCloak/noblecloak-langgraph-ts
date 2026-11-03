@@ -60,10 +60,8 @@ const manifestLicenseViolations = (manifest: Record<string, unknown>): string[] 
   ...(manifest.author === 'NobleCloak' ? [] : ['author is not NobleCloak']),
 ];
 
-// An exact version, a workspace link, or one of the two vendored contract tarballs (contract.test.ts
-// checks those against contract.json and vendor/SHA256SUMS).
-const PINNED =
-  /^(\d+\.\d+\.\d+(-[\w.]+)?|workspace:.+|file:(\.{1,2}\/)+vendor\/noblecloak-(client|spec)-\d+\.\d+\.\d+\.tgz)$/;
+// An exact version or a workspace link; a file: path, even to a tarball in the tree, is not a pin.
+const PINNED = /^(\d+\.\d+\.\d+(-[\w.]+)?|workspace:.+)$/;
 /** Every dependency range in dependencies, devDependencies and optionalDependencies that is not an exact pin. */
 const pinViolations = (manifest: Record<string, unknown>): string[] =>
   ['dependencies', 'devDependencies', 'optionalDependencies'].flatMap((field) =>
@@ -128,17 +126,19 @@ describe('versions are pinned exactly', () => {
     expect(pinViolations(readJson(path))).toEqual([]);
   });
 
-  it('the pin check rejects a range, a tag, an unvendored file: link and a bad field, and accepts the allowed forms', () => {
+  it('the pin check rejects a range, a tag, a file: link and a bad field, and accepts the allowed forms', () => {
     expect(
       pinViolations({
         dependencies: {
           a: '1.2.3',
           b: 'workspace:*',
           c: '1.0.0-rc.1',
-          d: 'file:../vendor/noblecloak-client-0.1.0.tgz',
         },
       })
     ).toEqual([]);
+    expect(
+      pinViolations({ dependencies: { d: 'file:../vendor/noblecloak-client-0.1.0.tgz' } })
+    ).toEqual(['dependencies.d: file:../vendor/noblecloak-client-0.1.0.tgz']);
     expect(pinViolations({ dependencies: { a: '^1.2.3' } })).toEqual(['dependencies.a: ^1.2.3']);
     expect(pinViolations({ devDependencies: { a: 'latest' } })).toEqual([
       'devDependencies.a: latest',
@@ -459,6 +459,66 @@ const unpinnedUses = (workflow: Workflow, raw: string): string[] => {
   return found;
 };
 
+/** The jobs that install the contract packages from the package registry, by workflow file. */
+const REGISTRY_READERS: Record<string, readonly string[]> = {
+  'ci.yml': ['gate', 'skill'],
+  'publish.yml': ['pack', 'version'],
+};
+const JOB_TOKEN = '${{ github.token }}';
+
+/**
+ * Where the registry readers would install without the job token: each must hold `packages: read` with
+ * `contents: read` beside it (a job-level block replaces the inherited one), and every `bun install` step and
+ * the `bun run exercise:skill` step must carry `NODE_AUTH_TOKEN: ${{ github.token }}`, which the root .npmrc
+ * reads. Returns `<file>:<job>` or `<file>:<job>:<run>` per gap.
+ */
+const registryReadViolations = (files: Record<string, Workflow>): string[] => {
+  const found: string[] = [];
+  for (const [file, jobs] of Object.entries(REGISTRY_READERS)) {
+    for (const name of jobs) {
+      const job = files[file]?.jobs[name];
+      if (job === undefined) {
+        found.push(`${file}:${name} is missing`);
+        continue;
+      }
+      const permissions = isPlainMap(job.permissions) ? job.permissions : {};
+      if (permissions.packages !== 'read' || permissions.contents === undefined)
+        found.push(`${file}:${name}`);
+    }
+  }
+  for (const [file, workflow] of Object.entries(files)) {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        const run = (step.run ?? '').trim();
+        if (!/^bun install\b/.test(run) && run !== 'bun run exercise:skill') continue;
+        if (step.env?.NODE_AUTH_TOKEN !== JOB_TOKEN) found.push(`${file}:${name}:${run}`);
+      }
+    }
+  }
+  return found;
+};
+
+/**
+ * `<file>:<job>:<run>` for every `bun install` step that does not pass `--ignore-scripts` inside a job that
+ * holds any write scope (its own block, or the workflow's when the job has none; `write-all` counts): a
+ * dependency lifecycle script there would run where the write-scoped token can be handed to it, as
+ * `NODE_AUTH_TOKEN` is in `publish version`.
+ */
+const scriptedTokenInstalls = (files: Record<string, Workflow>): string[] => {
+  const found: string[] = [];
+  for (const [file, workflow] of Object.entries(files)) {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (!holdsWrite(job.permissions ?? workflow.permissions)) continue;
+      for (const step of job.steps ?? []) {
+        const run = (step.run ?? '').trim();
+        if (!/^bun install\b/.test(run)) continue;
+        if (!/(^|\s)--ignore-scripts(\s|$)/.test(run)) found.push(`${file}:${name}:${run}`);
+      }
+    }
+  }
+  return found;
+};
+
 const INSTALL_OR_BUILD =
   /\b(bun|npm|pnpm|yarn)\s+(install|i|ci|add)\b|\bbun\s+x\b|\bbunx\b|\bnpx\b|\bturbo\b|\brun\s+(build|pack:all)\b/;
 
@@ -691,6 +751,8 @@ describe('workflows', () => {
     inherited.permissions = { contents: 'write' };
     const inheritedPack = inherited.jobs.pack;
     if (inheritedPack === undefined) throw new Error('pack job missing');
+    // Without a block of its own the job inherits the workflow's.
+    delete inheritedPack.permissions;
     inheritedPack.steps = (inheritedPack.steps ?? []).map((step) =>
       step.uses?.startsWith('actions/checkout@') === true ? { uses: step.uses } : step
     );
@@ -807,7 +869,112 @@ describe('workflows', () => {
     const pack = jobs.pack;
     const upload = pack?.steps?.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
     expect(upload?.with?.name).toBe('npm-packages');
-    expect(pack?.permissions).toBeUndefined();
+    // The pack job reads the contract packages from the registry and holds no write.
+    expect(pack?.permissions).toEqual({ contents: 'read', packages: 'read' });
+  });
+
+  it('every job that installs reads the package registry with the job token, and the top level stays contents: read', () => {
+    expect(registryReadViolations(allWorkflows)).toEqual([]);
+    for (const file of ['ci.yml', 'publish.yml'])
+      expect(allWorkflows[file]?.permissions, file).toEqual({ contents: 'read' });
+    expect(allWorkflows['publish.yml']?.jobs.version?.permissions).toEqual({
+      contents: 'write',
+      'pull-requests': 'write',
+      packages: 'read',
+    });
+    const workflows = (): Record<string, Workflow> => structuredClone(allWorkflows);
+    const job = (files: Record<string, Workflow>, file: string, name: string): Job => {
+      const found = files[file]?.jobs[name];
+      if (found === undefined) throw new Error(`${file}:${name} missing`);
+      return found;
+    };
+
+    const noBlock = workflows();
+    delete job(noBlock, 'ci.yml', 'gate').permissions;
+    expect(registryReadViolations(noBlock)).toEqual(['ci.yml:gate']);
+
+    const noPackages = workflows();
+    job(noPackages, 'publish.yml', 'version').permissions = {
+      contents: 'write',
+      'pull-requests': 'write',
+    };
+    expect(registryReadViolations(noPackages)).toEqual(['publish.yml:version']);
+
+    const noContents = workflows();
+    job(noContents, 'ci.yml', 'skill').permissions = { packages: 'read' };
+    expect(registryReadViolations(noContents)).toEqual(['ci.yml:skill']);
+
+    const missing = workflows();
+    delete missing['publish.yml']?.jobs.pack;
+    expect(registryReadViolations(missing)).toEqual(['publish.yml:pack is missing']);
+
+    const noToken = workflows();
+    for (const [file, name, run] of [
+      ['ci.yml', 'gate', 'bun install --frozen-lockfile'],
+      ['ci.yml', 'skill', 'bun run exercise:skill'],
+      ['publish.yml', 'pack', 'bun install --frozen-lockfile'],
+    ] as const) {
+      const step = (job(noToken, file, name).steps ?? []).find((s) => s.run?.trim() === run);
+      if (step === undefined) throw new Error(`${file}:${name} has no ${run}`);
+      delete step.env;
+    }
+    const wrongToken = job(noToken, 'publish.yml', 'version').steps?.find(
+      (s) => s.run?.trim() === 'bun install --frozen-lockfile --ignore-scripts'
+    );
+    if (wrongToken === undefined) throw new Error('version has no install');
+    wrongToken.env = { NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}' };
+    expect(registryReadViolations(noToken)).toEqual([
+      'ci.yml:gate:bun install --frozen-lockfile',
+      'ci.yml:skill:bun run exercise:skill',
+      'publish.yml:pack:bun install --frozen-lockfile',
+      'publish.yml:version:bun install --frozen-lockfile --ignore-scripts',
+    ]);
+  });
+
+  it('a job that holds a write scope installs only under --ignore-scripts', () => {
+    expect(scriptedTokenInstalls(allWorkflows)).toEqual([]);
+    const versionInstall = (files: Record<string, Workflow>): Step => {
+      const step = files['publish.yml']?.jobs.version?.steps?.find((s) =>
+        s.run?.trim().startsWith('bun install')
+      );
+      if (step === undefined) throw new Error('version has no install');
+      return step;
+    };
+    expect(versionInstall(allWorkflows).run?.trim()).toBe(
+      'bun install --frozen-lockfile --ignore-scripts'
+    );
+
+    const scripted = structuredClone(allWorkflows);
+    versionInstall(scripted).run = 'bun install --frozen-lockfile';
+    expect(scriptedTokenInstalls(scripted)).toEqual([
+      'publish.yml:version:bun install --frozen-lockfile',
+    ]);
+
+    // A read-only job (pack) may run scripts; giving it a write scope makes the same step a violation.
+    const writingPack = structuredClone(allWorkflows);
+    const pack = writingPack['publish.yml']?.jobs.pack;
+    if (pack === undefined) throw new Error('pack missing');
+    pack.permissions = { contents: 'write', packages: 'read' };
+    expect(scriptedTokenInstalls(writingPack)).toEqual([
+      'publish.yml:pack:bun install --frozen-lockfile',
+    ]);
+
+    // A job with no block of its own takes the workflow's, so a write-all workflow makes pack's step a violation.
+    const inherited = structuredClone(allWorkflows);
+    const publishFile = inherited['publish.yml'];
+    if (publishFile?.jobs.pack === undefined) throw new Error('pack missing');
+    delete publishFile.jobs.pack.permissions;
+    publishFile.permissions = 'write-all';
+    expect(scriptedTokenInstalls(inherited)).toEqual([
+      'publish.yml:pack:bun install --frozen-lockfile',
+    ]);
+
+    // A flag that only starts with --ignore-scripts is not the flag.
+    const lookalike = structuredClone(allWorkflows);
+    versionInstall(lookalike).run = 'bun install --frozen-lockfile --ignore-scripts-x';
+    expect(scriptedTokenInstalls(lookalike)).toEqual([
+      'publish.yml:version:bun install --frozen-lockfile --ignore-scripts-x',
+    ]);
   });
 
   it('the install-or-build pattern matches what it forbids', () => {
