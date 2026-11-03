@@ -13,10 +13,11 @@
  *   URL than `registry.npmjs.org` in an .npmrc or bunfig.toml, a mapping of any other scope or to any other
  *   registry, a mapping in any other file and a second mapping are violations, as is a URL other than
  *   `registry.npmjs.org` in `publishConfig.registry`;
- * - an auth line (`_auth`, `_authToken`, `_password`, a bunfig `token`) in any form but the one that reads the
- *   token from the environment: `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` in the root .npmrc, or the
- *   mapping's `token = "$NODE_AUTH_TOKEN"` in the root bunfig.toml;
- * - a bun.lock line that resolves from anywhere but `registry.npmjs.org`, except the package entry of a
+ * - a credential: in an .npmrc, any `_auth`, `_authToken` or `_password` line except
+ *   `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` in the root .npmrc while `contract.json` names a
+ *   scope; in a bunfig.toml, a `username`, a `password`, or a `token` other than `"$NODE_AUTH_TOKEN"`;
+ * - a bun.lock package entry that bun resolved other than by version or as a workspace (a path, `file:`,
+ *   `link:`, git), and a bun.lock line with a URL other than `registry.npmjs.org`, except the package entry of a
  *   contract-scope package whose tarball is under `https://npm.pkg.github.com/download/<that package>/`;
  * - a package.json whose `license` is not `Apache-2.0`.
  *
