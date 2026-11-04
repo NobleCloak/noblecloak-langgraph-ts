@@ -27,10 +27,10 @@ the docs snippets and the tooling workspace are private and not versioned. `.cha
 Run these before you open a pull request:
 
 ```sh
-bun install --frozen-lockfile   # needs NODE_AUTH_TOKEN; see "The contract packages"
+bun install --frozen-lockfile   # needs no token; see "The contract packages"
 bun run gate      # turbo run format:check lint typecheck test, then build
-bun run guard     # no path or git dependencies, one registry mapping, no literal token, Apache-2.0 everywhere
-bun run exercise:skill   # the setup skill's acceptance run against the mock (installs the packed adapter and the registry client)
+bun run guard     # no path or git dependencies, no registry mapping, no token, Apache-2.0 everywhere
+bun run exercise:skill   # the setup skill's acceptance run against the mock (installs the packed adapter and the client from npm)
 ```
 
 `bun install` also points git at `.githooks/` (the root `prepare` script sets `core.hooksPath`), whose
@@ -42,15 +42,11 @@ below 80% lines, functions, branches or statements.
 ## The contract packages
 
 The adapter is built against `@noblecloak/client` and `@noblecloak/spec` (the mock and the conformance
-suite). Both install by exact version from the NobleCloak organisation's package registry on GitHub Packages.
-The root `.npmrc` maps the `@noblecloak` scope to that registry and reads the token from `NODE_AUTH_TOKEN`; it
-holds no token itself. To install locally you need a personal GitHub token with the `read:packages` scope in
-that variable, for example `NODE_AUTH_TOKEN="$(gh auth token)" bun install --frozen-lockfile` when your `gh`
-login has the scope. Keep the token in your environment, never in a file in the repository. A token kept in
-`~/.npmrc` is not used here: the root `.npmrc` sets the same `//npm.pkg.github.com/:_authToken` key from
-`NODE_AUTH_TOKEN`, and the project file overrides the user one, so set the variable. Without it the
-install fails on the two packages (401); it does not fall back to npmjs. CI hands each install the job token
-(`packages: read`).
+suite). Both install by exact version from the public npm registry (registry.npmjs.org), like every other
+dependency. The repository has no `.npmrc` and maps no scope to another registry, so installing needs no token,
+locally or in CI, and `bun.lock` records the packages with no URL. If your own `~/.npmrc` still maps
+`@noblecloak` to GitHub Packages (older instructions did), remove that mapping and its token line. A version must be on npm before a manifest can name it, and `scripts/release.ts` refuses a tarball whose
+`@noblecloak/*` dependency npm does not have (see below).
 
 `contract.json` records the pair (`"phase": "registry"`, the two versions, and the contract revision they
 implement as the label `contractRevision`). The adapter, the example and the docs snippets name each package at
@@ -59,8 +55,7 @@ fails when `contract.json`, those manifests and the installed versions disagree,
 `overrides` or `resolutions` block or a `file:`/`link:` dependency, or when a `vendor/` directory exists.
 
 To move to a new pair: change the two versions (and the revision label) in `contract.json`, change the same
-versions in the manifests that name them, and run `bun install` with `NODE_AUTH_TOKEN` set to rewrite
-`bun.lock`.
+versions in the manifests that name them, and run `bun install` to rewrite `bun.lock`.
 
 ## Packing and releasing
 
@@ -68,28 +63,33 @@ versions in the manifests that name them, and run `bun install` with `NODE_AUTH_
 `LICENSE` and `NOTICE`. `bun run release` (`scripts/release.ts`) publishes those tarballs as they are:
 
 - With no argument it publishes to npm with `--provenance` and no token (npm trusted publishing), and skips a
-  package npm has never seen, because the first publish of a package is manual.
+  package npm has never seen, because the first publish of a package is manual. The skipped package's tarball
+  gets the dependency check below too, so the release run fails rather than going green over a seed that names
+  a version npm lacks. That check does not run on a hand-run `npm publish`; see the next item.
+- `bun run release:check -- [<tarball-or-directory> ...]` runs the same dependency check against npm for the
+  named tarballs (default `artifacts/`) and publishes nothing; it exits 1 when a `@noblecloak/*` dependency is
+  not an exact version npm has. **Run it on the packed tarball before any manual first publish (seed) and publish
+  only on exit 0.** Nothing enforces that step: it is a maintainer's check, because `npm publish` run by hand
+  never executes `scripts/release.ts`.
 - With `--registry https://npm.pkg.github.com` it needs a non-empty `NODE_AUTH_TOKEN`, publishes only
   `@noblecloak/langgraph` (it skips any other public package with a printed line), publishes a package the
   registry answers 404 for, skips a version the registry has, and stops on any other answer.
 - It reads each tarball's `package.json` first and refuses to publish anything when a `@noblecloak/*`
   dependency is not an exact version the registry has, or this run publishes. The adapter's tarball names the
-  client at the exact version `contract.json` records.
+  client at the exact version `contract.json` records. On npm this covers a package skipped as not yet seeded.
 - Any other `--registry` value, and any other argument, is refused.
 
 ## CI and publishing
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`, on two runners with no matrix:
 `gate` (`bun install --frozen-lockfile`, `bun run gate`, `bun run guard`, actionlint) and `skill / langgraph` (the
-setup skill's acceptance run, `bun run exercise:skill`, which needs Node only). Both hold `packages: read` beside
-`contents: read` and hand `github.token` to the install (and to the acceptance run, which fetches the client
-tarball with `npm pack`) as `NODE_AUTH_TOKEN`. Each contract package must grant this repository Actions access
-in its package settings; until it does, the install fails with 401 or 403 in CI.
+setup skill's acceptance run, `bun run exercise:skill`, which needs Node only). Both hold `contents: read` and
+nothing else: the install and the acceptance run (which fetches the client tarball with `npm pack`) read public
+npm and are handed no token.
 
 `.github/workflows/publish.yml` runs on every `main` push and every `v*` tag. `publish pack` builds and packs the
-tarballs as the `npm-packages` artifact; it and `publish version` hold `packages: read` for the install.
-`publish version` also holds write scopes, so it installs with `--ignore-scripts` and no dependency lifecycle
-script runs with its token in the environment.
+tarballs as the `npm-packages` artifact and holds `contents: read` only. `publish version` holds write scopes, so
+it installs with `--ignore-scripts` and no dependency lifecycle script runs in it.
 `publish version` opens or updates the Changesets version pull request
 and publishes nothing; it is opened with `github.token`, so no `pull_request` workflow runs on it until a
 maintainer closes and reopens it. Every job that holds a write scope checks out with
@@ -114,11 +114,9 @@ Nothing runs on GitHub until this tree is pushed to a repository that exists.
 ## Rules the tree enforces
 
 - No dependency from a URL, a git or `github:` source, or a `file:`/`link:` path, and no registry other than
-  `registry.npmjs.org` in `.npmrc`, `bunfig.toml`, `bun.lock` or `publishConfig`, except one mapping: the
-  scope of the packages `contract.json` records to `https://npm.pkg.github.com`, in the root `.npmrc` (or root
-  `bunfig.toml`), whose packages alone may resolve from there in `bun.lock`. The only auth line allowed is the
-  one that reads the token from `NODE_AUTH_TOKEN`; a literal token is a violation. `bun run guard` checks it,
-  and names no scope itself.
+  `registry.npmjs.org` in `.npmrc`, `bunfig.toml`, `bun.lock` or `publishConfig`. No scope is mapped to a
+  registry, and no `.npmrc` or `bunfig.toml` holds an auth line (a token, a password or a username).
+  `bun run guard` checks it.
 - Every `package.json` declares `"license": "Apache-2.0"` and `"author": "NobleCloak"`.
 - No `any`. Type-only imports use `import type`. Relative imports end in `.js`.
 - Dependencies are pinned to exact versions, except the adapter's peer ranges. Dependabot opens grouped pull

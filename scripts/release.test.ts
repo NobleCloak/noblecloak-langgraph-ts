@@ -10,6 +10,7 @@ import type { Runner } from './pack-all.js';
 import {
   GITHUB_ALLOWLIST,
   GITHUB_REGISTRY,
+  checkOnly,
   main,
   npmView,
   registryFlags,
@@ -667,5 +668,68 @@ describe('the command line', () => {
     expect(views).toEqual([]);
     expect(calls).toEqual([]);
     expect(lines.join('\n')).toContain('--registry takes');
+  });
+});
+
+describe('release --check-only', () => {
+  beforeEach(() => {
+    packAll(root, fakeRunner([]));
+  });
+
+  const adapter = (): string => join(root, 'artifacts', 'noblecloak-langgraph-1.0.0.tgz');
+
+  it('fails for a tarball whose dependency npm lacks, and publishes nothing', () => {
+    const lines: string[] = [];
+    const lookup = registry({ '@noblecloak/client': { kind: 'versions', versions: ['0.9.0'] } });
+    expect(checkOnly(root, [adapter()], (l) => lines.push(l), lookup)).toBe(1);
+    expect(lines).toContain(
+      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@0.10.0, but npm has no @noblecloak/client@0.10.0 and this run does not publish it. Publish @noblecloak/client@0.10.0 to npm first, or in the same release.'
+    );
+  });
+
+  it('fails for a dependency npm has never seen', () => {
+    const lookup = registry({ '@noblecloak/client': { kind: 'not-found' } });
+    expect(checkOnly(root, [adapter()], () => undefined, lookup)).toBe(1);
+  });
+
+  it('passes when npm has the exact version, and a directory stands for its tarballs', () => {
+    const lines: string[] = [];
+    expect(checkOnly(root, [], (l) => lines.push(l), registry())).toBe(0);
+    expect(lines).toContain('@noblecloak/langgraph@1.0.0: dependencies are on npm');
+    expect(lines).toContain('@noblecloak/other@0.1.0: dependencies are on npm');
+    expect(checkOnly(root, [join(root, 'artifacts')], () => undefined, registry())).toBe(0);
+  });
+
+  it('refuses a missing path and a directory with no tarball', () => {
+    const lines: string[] = [];
+    expect(checkOnly(root, [join(root, 'nope.tgz')], (l) => lines.push(l), registry())).toBe(1);
+    mkdirSync(join(root, 'empty'));
+    expect(checkOnly(root, [join(root, 'empty')], (l) => lines.push(l), registry())).toBe(1);
+    expect(lines.filter((l) => l.includes('Nothing was checked'))).toHaveLength(2);
+  });
+
+  it('is reached from the command line, publishes nothing and takes the npm registry flags', () => {
+    const views: string[][] = [];
+    const calls: string[][] = [];
+    const code = main(
+      ['--check-only', adapter()],
+      {},
+      {
+        cwd: root,
+        out: () => undefined,
+        spawn: (args) => {
+          views.push([...args]);
+          return { status: 0, stdout: '["0.9.0"]', stderr: '' };
+        },
+        run: fakeRunner(calls),
+      }
+    );
+    expect(code).toBe(1);
+    expect(calls).toEqual([]);
+    expect(views[0]?.slice(-3)).toEqual([
+      '--registry',
+      NPM_REGISTRY,
+      `--@noblecloak:registry=${NPM_REGISTRY}`,
+    ]);
   });
 });

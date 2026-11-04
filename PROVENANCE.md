@@ -12,5 +12,5 @@ Brought from the same source sha after staging, and cut to this repository: `scr
 langgraph skill's shape, `docs/snippets/sync-check.ts` and its test, and the adapter section of
 `docs/how-to/first-governed-tool.md` as `docs/how-to/govern-a-langgraph-agent.md`. The two contract packages
 were first vendored here as tarballs the staging script packed from a scratch build of the source at that sha;
-they now install from the organisation's package registry at the versions `contract.json` records, and no
+they now install from the public npm registry at the versions `contract.json` records, and no
 tarball of them is in the tree. The two repositories are not kept in step.

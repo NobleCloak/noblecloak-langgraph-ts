@@ -1,10 +1,18 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { contractScope } from './check-private-deps.js';
+import { findViolations } from './check-private-deps.js';
 import { CONTRACT_CONSUMERS, CONTRACT_PACKAGES, checkContract } from './contract.js';
 import { listWorkspacePackages } from './workspace.js';
 
@@ -28,13 +36,13 @@ describe('the contract pair of this repository', () => {
       phase: 'registry',
       contractRevision: 'contract-v1-rev15',
       packages: {
-        '@noblecloak/client': { version: '0.11.0' },
-        '@noblecloak/spec': { version: '0.10.0' },
+        '@noblecloak/client': { version: '0.11.1' },
+        '@noblecloak/spec': { version: '0.10.1' },
       },
     });
     const versions: Record<string, string> = {
-      '@noblecloak/client': '0.11.0',
-      '@noblecloak/spec': '0.10.0',
+      '@noblecloak/client': '0.11.1',
+      '@noblecloak/spec': '0.10.1',
     };
     for (const consumer of CONTRACT_CONSUMERS) {
       const block = read(ROOT, `${consumer.dir}/package.json`)[consumer.field] as Deps;
@@ -45,28 +53,24 @@ describe('the contract pair of this repository', () => {
   });
 });
 
-// The guard names no scope and allows whichever one contract.json records. This pins that scope to the
-// contract pair's, so editing contract.json (and the root .npmrc) to another scope fails the suite even
-// though `bun run guard` alone would accept it.
-describe('the scope the private-dependency guard allows', () => {
-  it('is @noblecloak, the scope of the contract pair, and the one the root .npmrc maps', () => {
-    expect(contractScope(ROOT)).toBe('@noblecloak');
+// The guard maps no scope to any registry, so the contract pair installs from registry.npmjs.org. This pins
+// the pair to the @noblecloak scope and the repository to carrying no registry mapping or token file.
+describe('where the contract pair installs from', () => {
+  it('is the public registry: the pair is @noblecloak/*, the root has no .npmrc and no scope mapping', () => {
     for (const name of CONTRACT_PACKAGES) expect(name.startsWith('@noblecloak/'), name).toBe(true);
-    expect(readFileSync(join(ROOT, '.npmrc'), 'utf8').split('\n')[0]).toBe(
-      '@noblecloak:registry=https://npm.pkg.github.com'
-    );
+    expect(existsSync(join(ROOT, '.npmrc'))).toBe(false);
+    expect(findViolations(ROOT)).toEqual([]);
   });
 
-  it('follows contract.json, so a changed scope is stopped by checkContract, not by the guard', () => {
+  it('records the pair under the @noblecloak scope only, so a changed scope is stopped by checkContract', () => {
     const tree = mkdtempSync(join(tmpdir(), 'contract-scope-'));
     try {
       write(tree, 'contract.json', {
         phase: 'registry',
         contractRevision: 'contract-v1-rev15',
-        packages: { '@other/client': { version: '0.11.0' }, '@other/spec': { version: '0.10.0' } },
+        packages: { '@other/client': { version: '0.11.1' }, '@other/spec': { version: '0.10.1' } },
       });
       write(tree, 'package.json', { name: 'x', private: true, license: 'Apache-2.0' });
-      expect(contractScope(tree)).toBe('@other');
       expect(checkContract(tree)).toContain(
         'contract.json: lists @other/client, @other/spec, not @noblecloak/client, @noblecloak/spec'
       );
@@ -136,37 +140,37 @@ describe('checkContract', () => {
   it('names a recorded version that is not exact', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'contract.json', (record) => {
-      (record.packages as Record<string, Json>)['@noblecloak/client'] = { version: '^0.11.0' };
+      (record.packages as Record<string, Json>)['@noblecloak/client'] = { version: '^0.11.1' };
     });
     expect(checkContract(tree)).toEqual([
-      'contract.json: @noblecloak/client is at "^0.11.0", not an exact version',
+      'contract.json: @noblecloak/client is at "^0.11.1", not an exact version',
     ]);
   });
 
   it('names a recorded version that is not the one installed and the manifests name', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'contract.json', (record) => {
-      (record.packages as Record<string, Json>)['@noblecloak/spec'] = { version: '0.10.1' };
+      (record.packages as Record<string, Json>)['@noblecloak/spec'] = { version: '0.10.0' };
     });
     expect(checkContract(tree)).toEqual([
-      'node_modules/@noblecloak/spec: installed 0.10.0, not 0.10.1',
-      'docs/snippets/package.json: devDependencies.@noblecloak/spec is 0.10.0, not 0.10.1',
-      'examples/langgraph-approvals/package.json: dependencies.@noblecloak/spec is 0.10.0, not 0.10.1',
-      'packages/langgraph/package.json: devDependencies.@noblecloak/spec is 0.10.0, not 0.10.1',
+      'node_modules/@noblecloak/spec: installed 0.10.1, not 0.10.0',
+      'docs/snippets/package.json: devDependencies.@noblecloak/spec is 0.10.1, not 0.10.0',
+      'examples/langgraph-approvals/package.json: dependencies.@noblecloak/spec is 0.10.1, not 0.10.0',
+      'packages/langgraph/package.json: devDependencies.@noblecloak/spec is 0.10.1, not 0.10.0',
     ]);
   });
 
   it('names a workspace manifest that names the pair at another version or as a range', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'packages/langgraph/package.json', (manifest) => {
-      (manifest.dependencies as Deps)['@noblecloak/client'] = '^0.11.0';
+      (manifest.dependencies as Deps)['@noblecloak/client'] = '^0.11.1';
     });
     editManifest(tree, 'scripts/package.json', (manifest) => {
       (manifest.devDependencies as Deps)['@noblecloak/spec'] = '0.9.0';
     });
     expect(checkContract(tree)).toEqual([
-      'packages/langgraph/package.json: dependencies.@noblecloak/client is ^0.11.0, not 0.11.0',
-      'scripts/package.json: devDependencies.@noblecloak/spec is 0.9.0, not 0.10.0',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is ^0.11.1, not 0.11.1',
+      'scripts/package.json: devDependencies.@noblecloak/spec is 0.9.0, not 0.10.1',
     ]);
   });
 
@@ -174,11 +178,11 @@ describe('checkContract', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'docs/snippets/package.json', (manifest) => {
       const dev = manifest.devDependencies as Deps;
-      manifest.dependencies = { ...(manifest.dependencies as Deps), '@noblecloak/spec': '0.10.0' };
+      manifest.dependencies = { ...(manifest.dependencies as Deps), '@noblecloak/spec': '0.10.1' };
       delete dev['@noblecloak/spec'];
     });
     expect(checkContract(tree)).toEqual([
-      'docs/snippets/package.json: devDependencies.@noblecloak/spec is missing, not 0.10.0',
+      'docs/snippets/package.json: devDependencies.@noblecloak/spec is missing, not 0.10.1',
     ]);
   });
 
@@ -196,7 +200,7 @@ describe('checkContract', () => {
   it('names the root manifest when it names a contract package', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'package.json', (manifest) => {
-      (manifest.devDependencies as Deps)['@noblecloak/client'] = '0.11.0';
+      (manifest.devDependencies as Deps)['@noblecloak/client'] = '0.11.1';
     });
     expect(checkContract(tree)).toEqual([
       'package.json: devDependencies.@noblecloak/client; the root names no contract package',
@@ -206,7 +210,7 @@ describe('checkContract', () => {
   it('names an overrides or resolutions block in the root or a workspace', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'package.json', (manifest) => {
-      manifest.overrides = { '@noblecloak/client': '0.11.0' };
+      manifest.overrides = { '@noblecloak/client': '0.11.1' };
     });
     editManifest(tree, 'examples/langgraph-approvals/package.json', (manifest) => {
       manifest.resolutions = {};
@@ -224,7 +228,7 @@ describe('checkContract', () => {
     });
     editManifest(tree, 'packages/langgraph/package.json', (manifest) => {
       (manifest.dependencies as Deps)['@noblecloak/client'] =
-        'file:../../vendor/noblecloak-client-0.11.0.tgz';
+        'file:../../vendor/noblecloak-client-0.11.1.tgz';
     });
     editManifest(tree, 'docs/snippets/package.json', (manifest) => {
       (manifest.dependencies as Deps)['right-pad'] = 'npm:link:../right-pad';
@@ -232,8 +236,8 @@ describe('checkContract', () => {
     expect(checkContract(tree)).toEqual([
       'package.json: devDependencies.left-pad is file:./vendor/left-pad.tgz, a path dependency',
       'docs/snippets/package.json: dependencies.right-pad is npm:link:../right-pad, a path dependency',
-      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.11.0.tgz, a path dependency',
-      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.11.0.tgz, not 0.11.0',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.11.1.tgz, a path dependency',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.11.1.tgz, not 0.11.1',
     ]);
   });
 
@@ -253,8 +257,8 @@ describe('checkContract', () => {
     });
     rmSync(join(tree, 'node_modules/@noblecloak/spec'), { recursive: true });
     expect(checkContract(tree)).toEqual([
-      'node_modules/@noblecloak/client: installed 0.10.0, not 0.11.0',
-      'node_modules/@noblecloak/spec: installed undefined, not 0.10.0',
+      'node_modules/@noblecloak/client: installed 0.10.0, not 0.11.1',
+      'node_modules/@noblecloak/spec: installed undefined, not 0.10.1',
     ]);
   });
 });

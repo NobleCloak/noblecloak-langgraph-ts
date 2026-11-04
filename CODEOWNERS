@@ -1,7 +1,5 @@
 # Default owner for everything in the repository.
 *                @dmcnelis
 
-# The record of the contract packages this adapter is built against, and the registry mapping they install
-# through.
+# The record of the contract packages this adapter is built against.
 /contract.json   @dmcnelis
-/.npmrc          @dmcnelis

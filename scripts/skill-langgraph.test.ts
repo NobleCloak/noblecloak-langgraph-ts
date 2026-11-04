@@ -53,7 +53,6 @@ import {
   listTemplateFiles,
   run,
   tarballFile,
-  registryTokenEnv,
   tarballSources,
   withoutRegistryToken,
 } from './skill-exercise-common.js';
@@ -108,15 +107,15 @@ describe('the skill in the exercise', () => {
       version: string;
     };
     expect(contractVersions(ROOT)).toEqual({
-      '@noblecloak/client': '0.11.0',
-      '@noblecloak/spec': '0.10.0',
+      '@noblecloak/client': '0.11.1',
+      '@noblecloak/spec': '0.10.1',
     });
     expect(sources).toEqual([
       {
         kind: 'registry',
         name: '@noblecloak/client',
-        file: 'noblecloak-client-0.11.0.tgz',
-        version: '0.11.0',
+        file: 'noblecloak-client-0.11.1.tgz',
+        version: '0.11.1',
       },
       {
         kind: 'packed',
@@ -134,7 +133,7 @@ describe('the skill in the exercise', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
       writeFileSync(
         join(root, 'contract.json'),
-        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.11.0' } } })
+        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.11.1' } } })
       );
       const manifest = (dependencies: Record<string, string>): void => {
         writeFileSync(
@@ -142,14 +141,14 @@ describe('the skill in the exercise', () => {
           JSON.stringify({ name: '@noblecloak/a', version: '1.0.0', dependencies })
         );
       };
-      manifest({ '@noblecloak/client': '0.11.0', 'plain-lib': '1.2.3' });
+      manifest({ '@noblecloak/client': '0.11.1', 'plain-lib': '1.2.3' });
       expect(tarballSources(root, '@noblecloak/a').map((source) => source.name)).toEqual([
         '@noblecloak/a',
         '@noblecloak/client',
       ]);
       manifest({ '@noblecloak/client': '0.10.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
-        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.11.0'
+        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.11.1'
       );
       manifest({ '@noblecloak/other': '1.0.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
@@ -190,10 +189,6 @@ describe('the skill in the exercise', () => {
       expect(withoutRegistryToken({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
         PATH: '/bin',
       });
-      expect(registryTokenEnv({ NODE_AUTH_TOKEN: 't', PATH: '/bin' })).toEqual({
-        NODE_AUTH_TOKEN: 't',
-      });
-      expect(registryTokenEnv({ PATH: '/bin' })).toEqual({});
       expect(cleanEnv({}).NODE_AUTH_TOKEN).toBeUndefined();
     } finally {
       if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
@@ -215,7 +210,7 @@ describe('the skill in the exercise', () => {
       expect(call.slice(0, call.indexOf('});'))).toContain('env: cleanEnv(');
   });
 
-  it('copies a packed tarball and fetches a registry one with npm pack, pinned to the package registry', () => {
+  it('copies a packed tarball and fetches a registry one with npm pack, pinned to the public npm registry, with no token', () => {
     const dir = mkdtempSync(join(tmpdir(), 'collect-'));
     const saved = process.env.NODE_AUTH_TOKEN;
     try {
@@ -242,14 +237,14 @@ describe('the skill in the exercise', () => {
           {
             kind: 'registry',
             name: '@noblecloak/client',
-            file: 'noblecloak-client-0.11.0.tgz',
-            version: '0.11.0',
+            file: 'noblecloak-client-0.11.1.tgz',
+            version: '0.11.1',
           },
         ],
         out,
         (command, args, cwd, env) => {
           calls.push({ command, args, cwd, env });
-          writeFileSync(join(out, 'noblecloak-client-0.11.0.tgz'), 'fetched');
+          writeFileSync(join(out, 'noblecloak-client-0.11.1.tgz'), 'fetched');
         }
       );
       expect(readFileSync(join(out, 'noblecloak-langgraph-1.0.0.tgz'), 'utf8')).toBe('packed');
@@ -258,16 +253,16 @@ describe('the skill in the exercise', () => {
           command: 'npm',
           args: [
             'pack',
-            '@noblecloak/client@0.11.0',
+            '@noblecloak/client@0.11.1',
             '--pack-destination',
             out,
             '--registry',
-            'https://npm.pkg.github.com',
-            '--@noblecloak:registry=https://npm.pkg.github.com',
+            'https://registry.npmjs.org',
+            '--@noblecloak:registry=https://registry.npmjs.org',
           ],
           cwd: '/repo',
-          // The fetch is the one command handed the registry token.
-          env: { NODE_AUTH_TOKEN: 'job-token' },
+          // The fetch needs no token, so it is handed no environment of its own.
+          env: {},
         },
       ]);
       expect(() => {
@@ -277,14 +272,14 @@ describe('the skill in the exercise', () => {
             {
               kind: 'registry',
               name: '@noblecloak/spec',
-              file: 'noblecloak-spec-0.10.0.tgz',
-              version: '0.10.0',
+              file: 'noblecloak-spec-0.10.1.tgz',
+              version: '0.10.1',
             },
           ],
           out,
           () => undefined
         );
-      }).toThrow(`npm pack @noblecloak/spec@0.10.0 left no noblecloak-spec-0.10.0.tgz in ${out}`);
+      }).toThrow(`npm pack @noblecloak/spec@0.10.1 left no noblecloak-spec-0.10.1.tgz in ${out}`);
     } finally {
       if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
       else process.env.NODE_AUTH_TOKEN = saved;

@@ -1,7 +1,7 @@
 /**
  * The acceptance run of the langgraph skill (`bun run exercise:skill`, that is `bun scripts/skill-exercise-agent.ts
  * [--keep] [--skip-e2e]`): a Node project, no browser. It builds and packs the adapter, fetches the contract client
- * from the package registry at the version `contract.json` records, scaffolds a minimal LangGraph project, applies the skill's script, writes in place
+ * from the public npm registry at the version `contract.json` records, scaffolds a minimal LangGraph project, applies the skill's script, writes in place
  * of the model the files its steps produce (`skill-exercise-agent-fixtures.ts`), then runs `propose.mjs` against
  * `nc-mock`, approves the proposal as the mock's administrator and checks what the deployment did with it. Then it
  * runs the agent and the skill's own worker as separate processes: the agent pauses on the refund, the worker
@@ -9,11 +9,10 @@
  * real service-principal credential against a stub token endpoint and are given no pasted token, so the run also
  * proves the generated governance module authenticates from that credential.
  *
- * Network: the public npm registry, the organisation's package registry for the contract client (`npm pack`, with
- * the token from `NODE_AUTH_TOKEN`), and whatever the install script of `better-sqlite3` downloads (its prebuilt
- * binary). Only that `npm pack` is given `NODE_AUTH_TOKEN`; every other command and process this run starts (the
- * build, the scaffold's install and its install scripts, the skill, the mock, the agent and the worker) runs
- * without it.
+ * Network: the public npm registry (the contract client by `npm pack`, and the scaffold's install), and whatever
+ * the install script of `better-sqlite3` downloads (its prebuilt binary). No token is needed, and no command or
+ * process this run starts (the build, the install and its install scripts, the skill, the mock, the agent and the
+ * worker) is given `NODE_AUTH_TOKEN`.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
