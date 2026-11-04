@@ -33,11 +33,12 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
   principal's credential file, and the service principal's id (the `id` that the deployment's principal list
   shows, or the id the create command prints; do not guess it from the credential's `client_id`). If the user has
   no service principal yet, offer to create one; the person who creates it must be an administrator of the
-  organisation. Running through the Claude Code plugin's `/noblecloak-setup`, offer
-  `node scripts/setup.mjs service-principal [--name <name>] [--out <path>]`: it opens a sign-in for the
-  administrator, creates the service principal, writes the credential outside the repository (mode 0600), and
-  prints the id, the credential path and the `NOBLECLOAK_SP_CREDENTIALS`, `NC_EXPECTED_PRINCIPAL` and
-  `NC_BASE_URL` lines. Otherwise give them the command to run:
+  organisation. Running through the Claude Code plugin's `/noblecloak-setup`, offer the plugin's service-principal
+  step (the plugin's own `scripts/setup.mjs service-principal`, run exactly as `/noblecloak-setup` gives it; it is not
+  a path in the user's project): it opens a sign-in for the administrator, creates the service principal, writes
+  the credential outside the repository (mode 0600), and prints the id, the credential path and the
+  `NOBLECLOAK_SP_CREDENTIALS`, `NC_EXPECTED_PRINCIPAL` and `NC_BASE_URL` lines. Otherwise give them the command to
+  run:
 
   ```sh
   npx @noblecloak/cli sp create --org <org uuid> --name "<agent name>" \
