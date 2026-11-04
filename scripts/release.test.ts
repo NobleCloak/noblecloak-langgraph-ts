@@ -469,6 +469,32 @@ describe('release dependency guard', () => {
     );
   });
 
+  it('fails a not-yet-seeded package whose client npm does not have, instead of skipping it', () => {
+    const calls: string[][] = [];
+    const lines: string[] = [];
+    const lookup = registry({
+      '@noblecloak/langgraph': { kind: 'not-found' },
+      '@noblecloak/client': { kind: 'versions', versions: ['0.9.0'] },
+    });
+    expect(release(root, (l) => lines.push(l), lookup, fakeRunner(calls))).toBe(1);
+    expect(published(calls)).toEqual([]);
+    expect(lines).toContain(
+      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@0.10.0, but npm has no @noblecloak/client@0.10.0 and this run does not publish it. Publish @noblecloak/client@0.10.0 to npm first, or in the same release.'
+    );
+    expect(lines).toContain('::error::Nothing was published.');
+  });
+
+  it('still skips a not-yet-seeded package with a warning when its dependencies are on npm', () => {
+    const calls: string[][] = [];
+    const lines: string[] = [];
+    const lookup = registry({ '@noblecloak/langgraph': { kind: 'not-found' } });
+    expect(release(root, (l) => lines.push(l), lookup, fakeRunner(calls))).toBe(0);
+    expect(published(calls)).not.toContain('noblecloak-langgraph-1.0.0.tgz');
+    expect(lines).toContain(
+      '::warning::@noblecloak/langgraph is not on npm yet; skipped. Its first publish is manual.'
+    );
+  });
+
   it('refuses a tarball packed with the vendored file: pin, which no registry could install', () => {
     writePackage('packages/langgraph', {
       name: '@noblecloak/langgraph',

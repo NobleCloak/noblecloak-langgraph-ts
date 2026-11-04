@@ -25,7 +25,10 @@
  * tarball, where `bun pm pack` has already rewritten `workspace:` ranges. Each such entry must be an exact
  * version that the registry already has, or that this run publishes. A `file:` range is not an exact version, so
  * a tarball packed while the contract packages are vendored cannot be published. Any failure publishes nothing and
- * exits 1; an unseeded dependency is one of those failures, not a warning. Packages are then published
+ * exits 1; an unseeded dependency is one of those failures, not a warning. On npm the same check covers a package
+ * that is skipped as not yet seeded: its first publish is manual, so a tarball whose `@noblecloak/*` dependency npm
+ * does not have would be published by hand into an uninstallable state, and the run fails instead of skipping it
+ * quietly. Packages are then published
  * dependencies first, and the run stops at the first failed publish, so a dependent never goes live ahead of its
  * dependency.
  */
@@ -168,16 +171,20 @@ export interface PublishCandidate {
 /**
  * The problems that stop the run, one line per unmet dependency. A dependency is met when its range is an exact
  * version that the registry already has, or that a candidate publishes in this run at exactly that version.
- * `label` names the registry in the messages.
+ * `label` names the registry in the messages. `checkOnly` lists packages the run skips: their dependencies are
+ * checked the same way.
  */
 export function unmetDependencies(
   candidates: readonly PublishCandidate[],
   registry: (name: string) => RegistryState,
-  label = 'npm'
+  label = 'npm',
+  checkOnly: readonly PublishCandidate[] = []
 ): string[] {
   const publishing = new Map(candidates.map((c) => [c.name, c.version]));
   const problems: string[] = [];
-  for (const candidate of candidates) {
+  // `checkOnly` entries have their dependencies checked but are not published by this run, so they never count
+  // as a dependency another entry gets from "this run publishes it".
+  for (const candidate of [...candidates, ...checkOnly]) {
     const who = `${candidate.name}@${candidate.version}`;
     for (const dep of candidate.dependencies) {
       if (!EXACT_VERSION.test(dep.range)) {
@@ -264,6 +271,7 @@ export function release(
   };
 
   const candidates: (PublishCandidate & { readonly tarball: string })[] = [];
+  const skipped: PublishCandidate[] = [];
   for (const pkg of packages) {
     if (github && !GITHUB_ALLOWLIST.includes(pkg.name)) {
       out(`${pkg.name}@${pkg.version} is not on the allowlist for ${registry}; skipped.`);
@@ -272,6 +280,11 @@ export function release(
     const decision = decide(pkg.version, known(pkg.name), registry);
     if (decision === 'skip-not-seeded') {
       out(`::warning::${pkg.name} is not on npm yet; skipped. Its first publish is manual.`);
+      const dependencies = internalDependencies(
+        readManifest(tarballFor(pkg, tarballs)),
+        workspaceNames
+      );
+      skipped.push({ name: pkg.name, version: pkg.version, dependencies });
     } else if (decision === 'skip-already-published') {
       out(`${pkg.name}@${pkg.version} already published; skipped.`);
     } else {
@@ -281,7 +294,7 @@ export function release(
     }
   }
 
-  const problems = unmetDependencies(candidates, known, label);
+  const problems = unmetDependencies(candidates, known, label, skipped);
   if (problems.length > 0) {
     for (const problem of problems) out(`::error::${problem}`);
     out('::error::Nothing was published.');
