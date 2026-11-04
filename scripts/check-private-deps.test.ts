@@ -119,6 +119,7 @@ describe('findViolations', () => {
   it('flags a scope mapped to a foreign registry in bunfig.toml, and passes the public registry', () => {
     write('bunfig.toml', '[install.scopes]\nacme-private = "https://npm.pkg.github.com"\n');
     expect(findViolations(root)).toEqual([
+      { file: 'bunfig.toml', key: 'line 1', kind: 'foreign-registry' },
       { file: 'bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
     ]);
     write('bunfig.toml', '[install]\nregistry = "https://registry.npmjs.org"\n');
@@ -191,8 +192,86 @@ describe('no registry mapping and no credential, the contract scope included', (
     ]);
   });
 
+  it.each([
+    ['an environment variable', 'registry=${NPM_REGISTRY}'],
+    ['a bare host', 'registry=registry.npmjs.org'],
+    ['a plain-http URL', 'registry=http://registry.npmjs.org'],
+    ['an empty value', 'registry='],
+  ])('flags an unscoped registry setting whose value is %s', (_label, line) => {
+    write('.npmrc', `${line}\n`);
+    expect(findViolations(root)).toEqual([
+      { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
+    ]);
+  });
+
+  it.each(['registry=https://registry.npmjs.org', 'registry=https://registry.npmjs.org/'])(
+    'passes the public registry as the unscoped registry setting (%s)',
+    (line) => {
+      write('.npmrc', `${line}\n`);
+      expect(findViolations(root)).toEqual([]);
+    }
+  );
+
+  it('flags a bunfig.toml registry set from an environment variable', () => {
+    write('bunfig.toml', '[install]\nregistry = "$NPM_REGISTRY"\n');
+    expect(findViolations(root)).toEqual([
+      { file: 'bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
+    ]);
+  });
+
   it('flags a mapping of the contract scope even to the public registry', () => {
     write('.npmrc', `${MAPPING}\n`);
+    expect(findViolations(root)).toEqual([
+      { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
+    ]);
+  });
+
+  it.each([
+    [
+      'an inline-table scope mapping',
+      '[install.scopes]\nnoblecloak = { url = "https://registry.npmjs.org" }\n',
+      1,
+    ],
+    [
+      'a string scope mapping to the public registry',
+      '[install.scopes]\nnoblecloak = "https://registry.npmjs.org"\n',
+      1,
+    ],
+    ['an [install.registry] table', '[install.registry]\nurl = "https://registry.npmjs.org"\n', 1],
+    ['an install.registry dotted key', 'install.registry = "https://registry.npmjs.org"\n', 1],
+    [
+      'an install.scopes dotted key',
+      'install.scopes.noblecloak = "https://registry.npmjs.org"\n',
+      1,
+    ],
+    [
+      'a scopes key inside [install]',
+      '[install]\nscopes = { noblecloak = "https://registry.npmjs.org" }\n',
+      2,
+    ],
+  ])('flags %s in a bunfig.toml', (_label, text, line) => {
+    write('bunfig.toml', text);
+    expect(findViolations(root)[0]).toEqual({
+      file: 'bunfig.toml',
+      key: `line ${String(line)}`,
+      kind: 'foreign-registry',
+    });
+  });
+
+  it('passes a bunfig.toml with only the public registry and no table', () => {
+    write(
+      'bunfig.toml',
+      '[install]\nlinker = "hoisted"\nregistry = "https://registry.npmjs.org"\n'
+    );
+    expect(findViolations(root)).toEqual([]);
+  });
+
+  it.each([
+    '${K}=${V}',
+    '@noblecloak:${X}=https://registry.npmjs.org',
+    '${SCOPE}:registry=https://registry.npmjs.org',
+  ])('flags an .npmrc key that holds an environment expansion (%s)', (line) => {
+    write('.npmrc', `${line}\n`);
     expect(findViolations(root)).toEqual([
       { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
     ]);
@@ -201,6 +280,7 @@ describe('no registry mapping and no credential, the contract scope included', (
   it('flags the mapping with its token in the root bunfig.toml', () => {
     write('bunfig.toml', `[install]\nlinker = "hoisted"\n\n[install.scopes]\n${BUNFIG_MAPPING}\n`);
     expect(findViolations(root)).toEqual([
+      { file: 'bunfig.toml', key: 'line 4', kind: 'foreign-registry' },
       { file: 'bunfig.toml', key: 'line 5', kind: 'npm-auth-token' },
       { file: 'bunfig.toml', key: 'line 5', kind: 'foreign-registry' },
     ]);
