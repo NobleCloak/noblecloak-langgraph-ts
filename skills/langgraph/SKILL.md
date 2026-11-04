@@ -29,14 +29,28 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
 - The project is a TypeScript or JavaScript project with `@langchain/langgraph` or `langchain` in its
   `package.json`, and an agent built with `createAgent` or a hand-built `StateGraph`. Stop and say so if it is
   not; the skill does not cover other runtimes.
-- **The agent needs its own service principal, created by an administrator of the organisation first.** Ask the
-  user for two things: the path of the service principal's credential file, and the service principal's id
-  (the `id` that the deployment's principal list shows for it; do not guess it from the credential's
-  `client_id`). If the user has only a user token (`NC_TOKEN` or a pasted access token), **stop**, and explain
-  why: the policies for an agent apply through the service principal bound to it, so an agent that runs on a
-  person's token is governed as that person, and a service principal never approves what it asks for. Ask them to
-  have an administrator create the service principal, then start again. Do not offer to run the agent on a user
-  token, and never write `NC_TOKEN` anywhere.
+- **The agent needs its own service principal.** Ask the user for two things: the path of the service
+  principal's credential file, and the service principal's id (the `id` that the deployment's principal list
+  shows, or the id the create command prints; do not guess it from the credential's `client_id`). If the user has
+  no service principal yet, offer to create one; the person who creates it must be an administrator of the
+  organisation. Running through the Claude Code plugin's `/noblecloak-setup`, offer
+  `node scripts/setup.mjs service-principal [--name <name>] [--out <path>]`: it opens a sign-in for the
+  administrator, creates the service principal, writes the credential outside the repository (mode 0600), and
+  prints the id, the credential path and the `NOBLECLOAK_SP_CREDENTIALS`, `NC_EXPECTED_PRINCIPAL` and
+  `NC_BASE_URL` lines. Otherwise give them the command to run:
+
+  ```sh
+  npx @noblecloak/cli sp create --org <org uuid> --name "<agent name>" \
+    --audience <the module API origin> --out <path outside the repository>
+  ```
+
+  It also needs `NOBLECLOAK_AUTH_URL` and `NOBLECLOAK_ADMIN_AUDIENCE` set to the values the deployment's operator
+  gives them. The credential file never goes into git. If the user has only a user token (`NC_TOKEN` or a pasted
+  access token) and will not create a service principal, **stop**, and explain why: the policies for an agent
+  apply through the service principal bound to it, so an agent that runs on a person's token is governed as that
+  person, and a service principal never approves what it asks for. Do not offer to run the agent on a user token,
+  and never write `NC_TOKEN` anywhere.
+
 - The person who runs the proposal is a user, not the service principal. They need their own user token in
   `NC_PROPOSER_TOKEN` (step 6), and the module API's origin in `NC_BASE_URL`. `NOBLECLOAK_APPROVALS_URL`, the
   address of the deployment's approvals module, is optional: when set, the script prints it next to the approval
