@@ -692,6 +692,31 @@ describe('propose.mjs: validateProposal', () => {
     ]);
   });
 
+  it('holds a policy name to 1 to 200 characters and a description to 2000', () => {
+    const at = 'action.arguments.policies[0].policy';
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = 'Search the tracker'))).toEqual([]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = ''))).toEqual([
+      `${at}.name must be 1 to 200 characters`,
+    ]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = 'x'.repeat(201)))).toEqual([
+      `${at}.name must be 1 to 200 characters`,
+    ]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).description = 'x'.repeat(2001)))).toEqual([
+      `${at}.description must be at most 2000 characters`,
+    ]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).description = 'x'.repeat(2000)))).toEqual([]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = '😀'.repeat(200)))).toEqual([]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = '😀'.repeat(201)))).toEqual([
+      `${at}.name must be 1 to 200 characters`,
+    ]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).name = 7))).toEqual([
+      `${at}.name must be a string`,
+    ]);
+    expect(problemsOf((p) => (policyOf(entry(p, 0)).description = 3))).toEqual([
+      `${at}.description must be a string`,
+    ]);
+  });
+
   it('holds a baseline to the everyone role and a tightening to this agent, one target each', () => {
     expect(
       problemsOf((p) => (policyOf(entry(p, 0)).subjects = [{ type: 'agent', id: 'agent_1' }]))
@@ -862,6 +887,78 @@ describe('propose.mjs: buildProposal', () => {
       ).problems
     ).toEqual(['plan.policies must be a list']);
     expect(propose.buildProposal('x', 'a').problems).toEqual(['the plan must be a JSON object']);
+  });
+
+  it('carries a name and a description of a plan entry into the policy, and leaves them out when absent', () => {
+    const withText = propose.buildProposal(
+      plan((p) => {
+        const [first] = p.policies as Json[];
+        Object.assign(must(first), {
+          name: 'Search the tracker',
+          description: 'Read-only search; no approval needed.',
+        });
+      }),
+      'agent_7'
+    );
+    expect(withText.problems).toBeUndefined();
+    const [first, second] = entriesOf(withText.proposal ?? {}).map((e) => policyOf(e));
+    expect(first).toMatchObject({
+      name: 'Search the tracker',
+      description: 'Read-only search; no approval needed.',
+    });
+    expect(Object.keys(must(second))).toEqual(['kind', 'subjects', 'targets', 'config']);
+    expect(propose.validateProposal(withText.proposal)).toEqual([]);
+    const nameOnly = propose.buildProposal(
+      plan((p) => {
+        must((p.policies as Json[])[0]).name = 'Only a name';
+      }),
+      'agent_7'
+    );
+    expect(Object.keys(policyOf(must(entriesOf(nameOnly.proposal ?? {})[0])))).toEqual([
+      'kind',
+      'name',
+      'subjects',
+      'targets',
+      'config',
+    ]);
+  });
+
+  it('holds a plan name to 1 to 200 characters and a description to 2000, and still refuses other members', () => {
+    const problems = (change: (e: Json) => void): string[] | undefined =>
+      propose.buildProposal(
+        plan((p) => {
+          change(must((p.policies as Json[])[0]));
+        }),
+        'a'
+      ).problems;
+    expect(problems((e) => (e.name = ''))).toEqual([
+      'plan.policies[0].name must be 1 to 200 characters',
+    ]);
+    expect(problems((e) => (e.name = 'x'.repeat(201)))).toEqual([
+      'plan.policies[0].name must be 1 to 200 characters',
+    ]);
+    expect(problems((e) => (e.name = 7))).toEqual(['plan.policies[0].name must be a string']);
+    expect(problems((e) => (e.name = 'x'.repeat(200)))).toBeUndefined();
+    expect(problems((e) => (e.description = 'x'.repeat(2001)))).toEqual([
+      'plan.policies[0].description must be at most 2000 characters',
+    ]);
+    expect(problems((e) => (e.description = 3))).toEqual([
+      'plan.policies[0].description must be a string',
+    ]);
+    // Lengths count code points, as JSON Schema maxLength does: an emoji is two UTF-16 units but one character.
+    expect(problems((e) => (e.name = '😀'.repeat(150)))).toBeUndefined();
+    expect(problems((e) => (e.name = '😀'.repeat(200)))).toBeUndefined();
+    expect(problems((e) => (e.name = '😀'.repeat(201)))).toEqual([
+      'plan.policies[0].name must be 1 to 200 characters',
+    ]);
+    expect(problems((e) => (e.description = '😀'.repeat(2000)))).toBeUndefined();
+    expect(problems((e) => (e.description = '😀'.repeat(2001)))).toEqual([
+      'plan.policies[0].description must be at most 2000 characters',
+    ]);
+    expect(problems((e) => (e.description = 'x'.repeat(2000)))).toBeUndefined();
+    expect(problems((e) => (e.title = 'x'))).toEqual([
+      'plan.policies[0].title is not a member of this object',
+    ]);
   });
 
   it('describes the proposal for the person who runs it, rationale included', () => {
