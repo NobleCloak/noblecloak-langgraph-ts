@@ -17,15 +17,14 @@ nothing is published from this repository yet. Licensed under Apache-2.0 (`LICEN
 | `skills/langgraph/`             | The setup skill: `SKILL.md`, two scripts (`apply.mjs`, `propose.mjs`) and four templates.                           |
 | `docs/how-to/`                  | [Govern a LangGraph agent](docs/how-to/govern-a-langgraph-agent.md); its code is typechecked in `docs/snippets/`.   |
 | `scripts/`                      | Repository tooling: the private-dependency guard, the contract check, pack and release, the skill's acceptance run. |
-| `contract.json`, `.npmrc`       | The record of the two contract packages the adapter is built against, and the registry mapping they install from.   |
+| `contract.json`                 | The record of the two contract packages the adapter is built against; both install from the public npm registry.    |
 
 ## Try it
 
-You need [Bun](https://bun.sh) (the version in `package.json`), Node (`.node-version`), and read access to the
-NobleCloak organisation's packages on GitHub (see [Contract packages](#contract-packages)).
+You need [Bun](https://bun.sh) (the version in `package.json`) and Node (`.node-version`). No account or token is
+needed to install (see [Contract packages](#contract-packages)).
 
 ```sh
-export NODE_AUTH_TOKEN=<a GitHub token with read:packages>
 bun install --frozen-lockfile
 bun run build
 bun run --cwd examples/langgraph-approvals start --middleware
@@ -41,7 +40,7 @@ The example itself needs no account and no credentials. The guide is
 
 ```sh
 bun run gate           # format:check, lint, typecheck and test through turbo, then build
-bun run guard          # no path or git dependency, one registry mapping, no literal token, Apache-2.0 everywhere
+bun run guard          # no path or git dependency, no registry mapping, no token, Apache-2.0 everywhere
 bun run exercise:skill # the skill's acceptance run: pack the adapter, apply the skill to a scaffold, run it on the mock
 ```
 
@@ -50,12 +49,8 @@ bun run exercise:skill # the skill's acceptance run: pack the adapter, apply the
 ## Contract packages
 
 The adapter depends on `@noblecloak/client` and is tested against the mock in `@noblecloak/spec`. Both install
-by exact version from the NobleCloak organisation's package registry on GitHub Packages, which the root `.npmrc`
-maps the `@noblecloak` scope to. That file holds no token: it reads one from `NODE_AUTH_TOKEN`. Locally, set
-that variable to a personal GitHub token with the `read:packages` scope (for example
-`NODE_AUTH_TOKEN="$(gh auth token)"` when your `gh` login has that scope); keep the token in your environment,
-never in the repository. A token in `~/.npmrc` is not used: the root `.npmrc` sets the same key from the variable
-and overrides it. CI hands the job token to each install. `contract.json` names the pair and
+by exact version from the public npm registry (registry.npmjs.org), like every other dependency: the repository
+maps no scope to another registry and needs no token. `contract.json` names the pair and
 `scripts/contract.test.ts` keeps it the same everywhere it is named.
 
 ## Related

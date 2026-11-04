@@ -1,6 +1,6 @@
 /**
  * Checks that the contract packages this adapter is built against are one pair everywhere they are named. The
- * pair installs from the organisation's package registry by exact version (`contract.json` says
+ * pair installs from the public npm registry (registry.npmjs.org) by exact version (`contract.json` says
  * `"phase": "registry"`), and these must all agree:
  *
  * - `contract.json`, the record of the pair: the two packages, each at an exact version, and the contract

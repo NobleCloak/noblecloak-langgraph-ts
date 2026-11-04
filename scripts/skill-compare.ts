@@ -27,7 +27,7 @@ export interface FixedFile {
 export interface NodeAgentSkillShape {
   readonly kind: 'node-agent';
   readonly dir: string;
-  /** The package whose tarball the project installs; its contract dependencies come from the package registry. */
+  /** The package whose tarball the project installs; its contract dependencies come from the public npm registry. */
   readonly rootPackage: string;
   readonly fixed: readonly FixedFile[];
   readonly unpaired: readonly string[];

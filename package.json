@@ -23,6 +23,7 @@
     "guard": "bun scripts/check-private-deps.ts",
     "pack:all": "bun scripts/pack-all.ts",
     "release": "bun --no-install scripts/release.ts",
+    "release:check": "bun --no-install scripts/release.ts --check-only",
     "exercise:skill": "bun scripts/skill-exercise-agent.ts",
     "changeset": "changeset",
     "clean": "turbo run clean",

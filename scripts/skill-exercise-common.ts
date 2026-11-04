@@ -9,20 +9,20 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, posix } from 'node:path';
 
-import { GITHUB_REGISTRY, registryFlags } from './release.js';
+import { NPM_REGISTRY, registryFlags } from './release.js';
 import { listPublicPackages } from './workspace.js';
 
-/** The variable the root `.npmrc` reads the package-registry token from. */
+/** The variable npm and bun read a registry token from. No command of the skill run needs one. */
 export const REGISTRY_TOKEN = 'NODE_AUTH_TOKEN';
 
-/** `env` without the package-registry token. */
+/** `env` without the registry token variable. */
 export function withoutRegistryToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => name !== REGISTRY_TOKEN));
 }
 
 /**
- * Runs a command with our environment minus the package-registry token, plus `env`; a caller that needs the
- * token (the `npm pack` in `collectTarballs`) passes it in `env`.
+ * Runs a command with our environment minus the registry token variable, plus `env`: a job token set for an
+ * earlier step never reaches a child of the skill run.
  */
 export function run(
   command: string,
@@ -72,7 +72,7 @@ export function tarballFile(name: string, version: string): string {
 
 /**
  * A tarball the project installs: the package `pack:all` packed into `artifacts/`, or a contract package this run
- * fetches from the package registry at the version `contract.json` records.
+ * fetches from the public npm registry at the version `contract.json` records.
  */
 export type TarballSource =
   | {
@@ -150,9 +150,8 @@ export type CommandRunner = (
 
 /**
  * Puts each source's tarball in `dir` under the name `apply.mjs --source` looks for: a packed one is copied, a
- * registry one is fetched with `npm pack <name>@<version>` from the package registry, run in `root` so the
- * repository's `.npmrc` supplies the token from `NODE_AUTH_TOKEN`. That fetch is the only command the skill run
- * hands the token to (`run` drops it otherwise). Throws when a fetch leaves no such file.
+ * registry one is fetched with `npm pack <name>@<version>` from the public npm registry, which needs no token.
+ * Throws when a fetch leaves no such file.
  */
 export function collectTarballs(
   root: string,
@@ -172,18 +171,12 @@ export function collectTarballs(
         `${source.name}@${source.version}`,
         '--pack-destination',
         dir,
-        ...registryFlags(GITHUB_REGISTRY),
+        ...registryFlags(NPM_REGISTRY),
       ],
       root,
-      registryTokenEnv(process.env)
+      {}
     );
     if (!existsSync(join(dir, source.file)))
       throw new Error(`npm pack ${source.name}@${source.version} left no ${source.file} in ${dir}`);
   }
-}
-
-/** The package-registry token from `env` as the one entry of an environment, or none when it is unset. */
-export function registryTokenEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const token = env[REGISTRY_TOKEN];
-  return token === undefined ? {} : { [REGISTRY_TOKEN]: token };
 }

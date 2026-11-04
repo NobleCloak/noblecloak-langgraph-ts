@@ -1,8 +1,8 @@
 # Two runners per pull request and per push to main, no matrix: GitHub Actions minutes are metered.
 # `gate` is what a developer runs locally (`bun run gate`, `bun run guard`) plus actionlint over the workflows.
 # `skill` is the setup skill's acceptance run (`bun run exercise:skill`); it needs Node only, no browser.
-# Both read the contract packages from the organisation's package registry with the job token (`packages: read`,
-# handed to every install and to the acceptance run as NODE_AUTH_TOKEN, which the root .npmrc reads).
+# Both install the contract packages from the public npm registry (registry.npmjs.org) like any other
+# dependency: no registry token, no `packages: read`, and nothing is handed to an install as NODE_AUTH_TOKEN.
 name: ci
 
 on:
@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,8 +34,6 @@ jobs:
         with:
           node-version-file: .node-version
       - run: bun install --frozen-lockfile
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
       # format:check, lint, typecheck and test through turbo, then build.
       - run: bun run gate
       - run: bun run guard
@@ -51,7 +48,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,15 +59,11 @@ jobs:
         with:
           node-version-file: .node-version
       - run: bun install --frozen-lockfile
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
       # Everything else (build, pack, scaffold a LangGraph project, apply the skill, open the proposal against
       # the mock, approve it, run the agent and the worker, the file comparison and the wall time) is the one
       # script a developer runs locally too.
       - name: Exercise the skill on a scaffolded LangGraph project
         run: bun run exercise:skill
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Keep the wall time
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

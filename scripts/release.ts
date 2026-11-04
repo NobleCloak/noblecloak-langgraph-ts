@@ -3,8 +3,15 @@
  * nothing, and imports only Node built-ins and the sibling scripts, so it runs without `node_modules`.
  *
  *   bun --no-install scripts/release.ts [--registry <url>]
+ *   bun --no-install scripts/release.ts --check-only [<tarball-or-directory> ...]
  *
  * `--registry` is one of two values; any other value, and any other argument, is refused.
+ *
+ * `--check-only` (`bun run release:check`) publishes nothing and takes no `--registry`: it runs the dependency
+ * check below against npm for the named tarballs (a directory stands for the `.tgz` files in it; with no path,
+ * `artifacts/`) and exits 1 on any unmet dependency. It is the check a maintainer runs before a manual first
+ * publish, and it is only as binding as the maintainer's running it: a manual `npm publish` never executes this
+ * script.
  *
  * - Absent, or `https://registry.npmjs.org`: publishes to npm with
  *   `--registry https://registry.npmjs.org --@noblecloak:registry=https://registry.npmjs.org --provenance --access public`.
@@ -26,14 +33,15 @@
  * version that the registry already has, or that this run publishes. A `file:` range is not an exact version, so
  * a tarball packed while the contract packages are vendored cannot be published. Any failure publishes nothing and
  * exits 1; an unseeded dependency is one of those failures, not a warning. On npm the same check covers a package
- * that is skipped as not yet seeded: its first publish is manual, so a tarball whose `@noblecloak/*` dependency npm
- * does not have would be published by hand into an uninstallable state, and the run fails instead of skipping it
- * quietly. Packages are then published
+ * that is skipped as not yet seeded: the run fails instead of skipping it quietly, so a release run never goes
+ * green over a seed whose `@noblecloak/*` dependency npm lacks. What the script cannot do is stop a hand-run
+ * `npm publish` of that seed; `--check-only` is the step that covers it. Packages are then published
  * dependencies first, and the run stops at the first failed publish, so a dependent never goes live ahead of its
  * dependency.
  */
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { listTarEntries, runCommand, verifyTarballs } from './pack-all.js';
 import type { EntryLister, Runner } from './pack-all.js';
@@ -125,6 +133,8 @@ export function tarballFor(pkg: WorkspacePackage, tarballs: readonly string[]): 
 
 /** The `dependencies` and `peerDependencies` a tarball's package.json declares. */
 export interface PackedManifest {
+  readonly name?: string;
+  readonly version?: string;
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
 }
@@ -333,6 +343,65 @@ export function release(
   return 0;
 }
 
+/**
+ * `--check-only`: runs the dependency check against `lookup` for the tarballs `paths` name (a directory stands
+ * for its `.tgz` files; no path means `artifacts/`) and publishes nothing. Returns 0 when every internal
+ * dependency is an exact version the registry has, 1 otherwise.
+ */
+export function checkOnly(
+  root: string,
+  paths: readonly string[],
+  out: (line: string) => void,
+  lookup: RegistryLookup,
+  readManifest: ManifestReader = readPackedManifest
+): number {
+  const targets =
+    paths.length === 0 ? [join(root, 'artifacts')] : paths.map((p) => resolve(root, p));
+  const tarballs: string[] = [];
+  for (const target of targets) {
+    if (!existsSync(target)) {
+      out(`::error::${target} does not exist. Nothing was checked.`);
+      return 1;
+    }
+    if (statSync(target).isDirectory()) {
+      tarballs.push(
+        ...readdirSync(target)
+          .filter((f) => f.endsWith('.tgz'))
+          .sort()
+          .map((f) => join(target, f))
+      );
+    } else {
+      tarballs.push(target);
+    }
+  }
+  if (tarballs.length === 0) {
+    out('::error::No .tgz tarball to check. Nothing was checked.');
+    return 1;
+  }
+  const workspaceNames = new Set(listPublicPackages(root).map((pkg) => pkg.name));
+  const entries: PublishCandidate[] = [];
+  for (const tarball of tarballs) {
+    const manifest = readManifest(tarball);
+    if (manifest.name === undefined || manifest.version === undefined) {
+      out(`::error::${tarball} has no name and version in its package.json. Nothing was checked.`);
+      return 1;
+    }
+    entries.push({
+      name: manifest.name,
+      version: manifest.version,
+      dependencies: internalDependencies(manifest, workspaceNames),
+    });
+  }
+  const problems = unmetDependencies([], lookup, 'npm', entries);
+  if (problems.length > 0) {
+    for (const problem of problems) out(`::error::${problem}`);
+    out('::error::Do not publish these tarballs: a version they name is not on npm.');
+    return 1;
+  }
+  for (const entry of entries) out(`${entry.name}@${entry.version}: dependencies are on npm`);
+  return 0;
+}
+
 /** What `main` reaches outside the process; tests replace it. */
 export interface MainDeps {
   readonly cwd: string;
@@ -345,6 +414,15 @@ export interface MainDeps {
 
 /** The command line: parses `argv`, builds the lookup from the parsed registry, and returns the exit code. */
 export function main(argv: readonly string[], env: NodeJS.ProcessEnv, deps: MainDeps): number {
+  if (argv[0] === '--check-only') {
+    return checkOnly(
+      deps.cwd,
+      argv.slice(1),
+      deps.out,
+      npmView(NPM_REGISTRY, deps.spawn),
+      deps.readManifest
+    );
+  }
   let registry: string;
   try {
     registry = parseRegistry(argv);

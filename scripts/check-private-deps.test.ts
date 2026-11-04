@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { contractScope, findViolations, runGuard } from './check-private-deps.js';
+import { findViolations, runGuard } from './check-private-deps.js';
 
 const CLEAN_PACKAGE = { name: '@noblecloak/fixture', license: 'Apache-2.0' };
 
@@ -170,176 +170,82 @@ describe('findViolations', () => {
   });
 });
 
-describe('the one registry mapping, for the contract scope', () => {
-  const MAPPING = '@acme-private:registry=https://npm.pkg.github.com';
+describe('no registry mapping and no credential, the contract scope included', () => {
+  const MAPPING = '@noblecloak:registry=https://registry.npmjs.org';
+  const GITHUB_MAPPING = '@noblecloak:registry=https://npm.pkg.github.com';
   const AUTH = '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}';
   const BUNFIG_MAPPING =
-    '"@acme-private" = { url = "https://npm.pkg.github.com", token = "$NODE_AUTH_TOKEN" }';
-  const lockEntry = (name: string, url: string): string =>
-    `    "${name}": ["${name}@1.0.0", "${url}", {}, "sha512-x"],`;
+    '"@noblecloak" = { url = "https://npm.pkg.github.com", token = "$NODE_AUTH_TOKEN" }';
 
   beforeEach(() => {
     write('contract.json', {
-      packages: { '@acme-private/client': { version: '1.0.0' }, '@acme-private/spec': {} },
+      packages: { '@noblecloak/client': { version: '1.0.0' }, '@noblecloak/spec': {} },
     });
   });
 
-  it('reads the scope from contract.json, and none when the packages do not share one', () => {
-    expect(contractScope(root)).toBe('@acme-private');
-    write('contract.json', { packages: { '@acme-private/client': {}, '@other/spec': {} } });
-    expect(contractScope(root)).toBeUndefined();
-    write('contract.json', { packages: { client: {} } });
-    expect(contractScope(root)).toBeUndefined();
-    write('contract.json', '{ not json');
-    expect(contractScope(root)).toBeUndefined();
-    write('contract.json', { phase: 'registry' });
-    expect(contractScope(root)).toBeUndefined();
-    rmSync(join(root, 'contract.json'));
-    expect(contractScope(root)).toBeUndefined();
-  });
-
-  it('passes the mapping and the environment token line in the root .npmrc', () => {
-    write('.npmrc', `${MAPPING}\n${AUTH}\n`);
-    expect(findViolations(root)).toEqual([]);
-  });
-
-  it('passes the mapping in the root bunfig.toml', () => {
-    write('bunfig.toml', `[install]\nlinker = "hoisted"\n\n[install.scopes]\n${BUNFIG_MAPPING}\n`);
-    expect(findViolations(root)).toEqual([]);
-  });
-
-  it('flags the mapping and the token line when no contract.json names the scope', () => {
-    rmSync(join(root, 'contract.json'));
-    write('.npmrc', `${MAPPING}\n${AUTH}\n`);
+  it('flags a mapping of the contract scope to the GitHub registry in the root .npmrc, with its token line', () => {
+    write('.npmrc', `${GITHUB_MAPPING}\n${AUTH}\n`);
     expect(findViolations(root)).toEqual([
       { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
       { file: '.npmrc', key: 'line 2', kind: 'npm-auth-token' },
     ]);
   });
 
+  it('flags a mapping of the contract scope even to the public registry', () => {
+    write('.npmrc', `${MAPPING}\n`);
+    expect(findViolations(root)).toEqual([
+      { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
+    ]);
+  });
+
+  it('flags the mapping with its token in the root bunfig.toml', () => {
+    write('bunfig.toml', `[install]\nlinker = "hoisted"\n\n[install.scopes]\n${BUNFIG_MAPPING}\n`);
+    expect(findViolations(root)).toEqual([
+      { file: 'bunfig.toml', key: 'line 5', kind: 'npm-auth-token' },
+      { file: 'bunfig.toml', key: 'line 5', kind: 'foreign-registry' },
+    ]);
+  });
+
   it.each([
-    ['another scope', '@acme-other:registry=https://npm.pkg.github.com'],
-    ['another scope on the public registry', '@acme-other:registry=https://registry.npmjs.org'],
-    ['another host', '@acme-private:registry=https://registry.example.com'],
-    ['a path on the host', '@acme-private:registry=https://npm.pkg.github.com/acme'],
-    ['plain http', '@acme-private:registry=http://npm.pkg.github.com'],
-    ['the default registry', 'registry=https://npm.pkg.github.com'],
-  ])('flags a mapping to %s in the root .npmrc', (_label, line) => {
+    ['a literal token', '//registry.npmjs.org/:_authToken=npm_literal'],
+    ['an environment token', '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}'],
+    ['a basic-auth line', '//registry.npmjs.org/:_auth=dXNlcjpwYXNz'],
+    ['a password line', '//registry.npmjs.org/:_password=cGFzcw=='],
+  ])('flags %s in the root .npmrc', (_label, line) => {
     write('.npmrc', `${line}\n`);
     expect(findViolations(root)).toEqual([
-      { file: '.npmrc', key: 'line 1', kind: 'foreign-registry' },
+      { file: '.npmrc', key: 'line 1', kind: 'npm-auth-token' },
     ]);
   });
 
-  it.each([
-    ['another scope', BUNFIG_MAPPING.replace('@acme-private', '@acme-other')],
-    ['another host', BUNFIG_MAPPING.replace('npm.pkg.github.com', 'registry.example.com')],
-    ['the string form', '"@acme-private" = "https://npm.pkg.github.com"'],
-    ['a scope on the public registry', '"@acme-other" = "https://registry.npmjs.org"'],
-  ])('flags a mapping to %s in the root bunfig.toml', (_label, line) => {
-    write('bunfig.toml', `[install.scopes]\n${line}\n`);
-    expect(findViolations(root)).toEqual([
-      { file: 'bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
-    ]);
-  });
-
-  it('flags the mapping and the token line anywhere but the root', () => {
-    write('packages/a/.npmrc', `${MAPPING}\n${AUTH}\n`);
-    write('packages/a/bunfig.toml', `[install.scopes]\n${BUNFIG_MAPPING}\n`);
-    expect(findViolations(root)).toEqual([
-      { file: 'packages/a/.npmrc', key: 'line 1', kind: 'foreign-registry' },
-      { file: 'packages/a/.npmrc', key: 'line 2', kind: 'npm-auth-token' },
-      { file: 'packages/a/bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
-    ]);
-  });
-
-  it('flags a second mapping, in the same file or the other one', () => {
-    write('.npmrc', `${MAPPING}\n${MAPPING}\n`);
-    expect(findViolations(root)).toEqual([
-      { file: '.npmrc', key: 'line 2', kind: 'second-registry-mapping' },
-    ]);
-    write('.npmrc', `${MAPPING}\n`);
-    write('bunfig.toml', `[install.scopes]\n${BUNFIG_MAPPING}\n`);
-    expect(findViolations(root)).toEqual([
-      { file: 'bunfig.toml', key: 'line 2', kind: 'second-registry-mapping' },
-    ]);
-  });
-
-  it.each([
-    ['a literal token', '//npm.pkg.github.com/:_authToken=ghp_literal'],
-    ['another variable', '//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}'],
-    ['another host', '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}'],
-    ['a basic-auth line', '//npm.pkg.github.com/:_auth=dXNlcjpwYXNz'],
-    ['a password line', '//npm.pkg.github.com/:_password=cGFzcw=='],
-  ])('flags %s in the root .npmrc', (_label, line) => {
-    write('.npmrc', `${MAPPING}\n${line}\n`);
-    expect(findViolations(root)).toEqual([
-      { file: '.npmrc', key: 'line 2', kind: 'npm-auth-token' },
-    ]);
-  });
-
-  it('flags a literal token in the bunfig.toml mapping', () => {
-    write(
-      'bunfig.toml',
-      `[install.scopes]\n${BUNFIG_MAPPING.replace('$NODE_AUTH_TOKEN', 'ghp_literal')}\n`
-    );
-    expect(findViolations(root)).toEqual([
-      { file: 'bunfig.toml', key: 'line 2', kind: 'npm-auth-token' },
-      { file: 'bunfig.toml', key: 'line 2', kind: 'foreign-registry' },
-    ]);
-  });
-
-  it('passes a lock entry of a contract-scope package from its own tarball on the package registry', () => {
+  it('flags a bun.lock entry whose tarball is on the GitHub registry, even for a contract-scope package', () => {
     write(
       'bun.lock',
       [
         '{',
         '  "packages": {',
-        lockEntry(
-          '@acme-private/client',
-          'https://npm.pkg.github.com/download/@acme-private/client/1.0.0/abc'
-        ),
+        '    "@noblecloak/client": ["@noblecloak/client@1.0.0", "https://npm.pkg.github.com/download/@noblecloak/client/1.0.0/abc", {}, "sha512-x"],',
+        '  },',
+        '}',
+      ].join('\n')
+    );
+    expect(findViolations(root)).toEqual([
+      { file: 'bun.lock', key: 'line 3', kind: 'foreign-source-dependency' },
+    ]);
+  });
+
+  it('passes a bun.lock entry for a contract-scope package resolved from the public registry', () => {
+    write(
+      'bun.lock',
+      [
+        '{',
+        '  "packages": {',
+        '    "@noblecloak/client": ["@noblecloak/client@1.0.0", "", {}, "sha512-x"],',
         '  },',
         '}',
       ].join('\n')
     );
     expect(findViolations(root)).toEqual([]);
-  });
-
-  it.each([
-    [
-      'a package of another scope',
-      lockEntry(
-        '@acme-other/client',
-        'https://npm.pkg.github.com/download/@acme-other/client/1.0.0/abc'
-      ),
-    ],
-    [
-      'a tarball of another package',
-      lockEntry(
-        '@acme-private/client',
-        'https://npm.pkg.github.com/download/@acme-private/spec/1.0.0/abc'
-      ),
-    ],
-    [
-      'another host',
-      lockEntry(
-        '@acme-private/client',
-        'https://registry.example.com/download/@acme-private/client/1.0.0/abc'
-      ),
-    ],
-    [
-      'a second URL on the line',
-      lockEntry(
-        '@acme-private/client',
-        'https://npm.pkg.github.com/download/@acme-private/client/1.0.0/abc'
-      ).replace('{}', '{ "x": "https://registry.example.com/y" }'),
-    ],
-  ])('flags a lock entry from the package registry for %s', (_label, line) => {
-    write('bun.lock', ['{', '  "packages": {', line, '  },', '}'].join('\n'));
-    expect(findViolations(root)).toEqual([
-      { file: 'bun.lock', key: 'line 3', kind: 'foreign-source-dependency' },
-    ]);
   });
 
   it('flags a lock entry bun resolved as a path, and passes a workspace entry', () => {
@@ -348,8 +254,8 @@ describe('the one registry mapping, for the contract scope', () => {
       [
         '{',
         '  "packages": {',
-        '    "@acme-private/client": ["@acme-private/client@./vendor/client-1.0.0.tgz", {}, "sha512-x"],',
-        '    "@acme-private/a": ["@acme-private/a@workspace:packages/a"],',
+        '    "@noblecloak/client": ["@noblecloak/client@./vendor/client-1.0.0.tgz", {}, "sha512-x"],',
+        '    "@noblecloak/a": ["@noblecloak/a@workspace:packages/a"],',
         '    "string-width-cjs": ["string-width@4.2.3", "", {}, "sha512-x"],',
         '    "nameless": ["nameless", {}],',
         '  },',
