@@ -13,7 +13,7 @@
 //
 // The plan file is smaller than the proposal. `agent` carries `principal_id` (the service principal's id as
 // `GET /v1/principals` lists it); its `id` comes from `agent.json`, and a plan that names another is refused; `tools` are `POST /v1/tools`
-// bodies (`owner_kind` defaults to `org`); each `policies` entry is `{ role, tool, mode, rationale, assessment }`.
+// bodies (`owner_kind` defaults to `org`); each `policies` entry is `{ role, tool, mode, rationale, assessment }` plus an optional `name` and `description`.
 // The script fills in the rest of each policy (kind, subject, target) and checks the built proposal against the
 // rules of `PolicySetProposal` before it sends anything. The deployment checks them again. A real run then reads the
 // policies already in force (`GET /v1/policies`, with the builder's token; read only) before it declares the agent or
@@ -71,6 +71,31 @@ function unknownMembers(value, allowed, path) {
 
 const PLAN_KEYS = ['agent', 'tools', 'policies'];
 const PLAN_ENTRY_KEYS = ['role', 'tool', 'mode', 'rationale', 'assessment'];
+// Optional on a plan entry: the policy's `name` (1 to 200 characters) and `description` (at most 2000), as the
+// contract's `PolicyWrite` bounds them. Absent, the deployment names the policy itself.
+const PLAN_ENTRY_OPTIONAL_KEYS = ['name', 'description'];
+const NAME_MAX = 200;
+const DESCRIPTION_MAX = 2000;
+// Lengths count code points (`[...value].length`), as JSON Schema `maxLength` does, not UTF-16 units.
+const textLength = (value) => [...value].length;
+const addProblem = (problems, problem) => {
+  if (problem !== undefined) problems.push(problem);
+};
+/** The problem with a policy `name` at `at`, or `undefined` when it is a string of 1 to NAME_MAX characters. */
+const nameProblem = (value, at) => {
+  if (typeof value !== 'string') return `${at} must be a string`;
+  const length = textLength(value);
+  return length >= 1 && length <= NAME_MAX
+    ? undefined
+    : `${at} must be 1 to ${NAME_MAX} characters`;
+};
+/** The problem with a policy `description` at `at`, or `undefined` when it is a string of at most DESCRIPTION_MAX characters. */
+const descriptionProblem = (value, at) => {
+  if (typeof value !== 'string') return `${at} must be a string`;
+  return textLength(value) <= DESCRIPTION_MAX
+    ? undefined
+    : `${at} must be at most ${DESCRIPTION_MAX} characters`;
+};
 const TOOL_KEYS = [
   'tool_ref',
   'transport',
@@ -129,9 +154,12 @@ export function buildProposal(plan, agentId) {
       problems.push(`${at} must be an object`);
       return entry;
     }
-    problems.push(...unknownMembers(entry, PLAN_ENTRY_KEYS, at));
+    problems.push(...unknownMembers(entry, [...PLAN_ENTRY_KEYS, ...PLAN_ENTRY_OPTIONAL_KEYS], at));
     for (const key of PLAN_ENTRY_KEYS)
       if (entry[key] === undefined) problems.push(`${at}.${key} is required`);
+    if (entry.name !== undefined) addProblem(problems, nameProblem(entry.name, `${at}.name`));
+    if (entry.description !== undefined)
+      addProblem(problems, descriptionProblem(entry.description, `${at}.description`));
     const subject =
       entry.role === 'baseline' ? { type: 'role', id: 'everyone' } : { type: 'agent', id: agentId };
     return {
@@ -140,6 +168,8 @@ export function buildProposal(plan, agentId) {
       assessment: entry.assessment,
       policy: {
         kind: 'tool_invocation',
+        ...(entry.name !== undefined ? { name: entry.name } : {}),
+        ...(entry.description !== undefined ? { description: entry.description } : {}),
         subjects: [subject],
         targets: { tools: [entry.tool] },
         config: { mode: entry.mode },
@@ -244,6 +274,10 @@ export function validateProposal(proposal) {
     );
     if (policy.kind !== 'tool_invocation')
       problems.push(`${path}.policy.kind must be tool_invocation`);
+    if (policy.name !== undefined)
+      addProblem(problems, nameProblem(policy.name, `${path}.policy.name`));
+    if (policy.description !== undefined)
+      addProblem(problems, descriptionProblem(policy.description, `${path}.policy.description`));
     const subject =
       Array.isArray(policy.subjects) && policy.subjects.length === 1
         ? policy.subjects[0]

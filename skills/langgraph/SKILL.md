@@ -173,6 +173,8 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
          "role": "baseline",
          "tool": "ext:billing:issue_refund",
          "mode": "ask",
+         "name": "Issue a refund — a person approves",
+         "description": "Every refund waits for a person to approve it.",
          "rationale": "Issues a refund to a customer: money leaves the organisation and cannot be recalled, so a person approves each one.",
          "assessment": {
            "side_effect_level": "external",
@@ -189,7 +191,9 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
    `tools` lists the `ext:` tools only (`transport` is `external` and `owner_kind` is `org`, filled in for you;
    `input_schema` is the tool's JSON Schema, `{ "type": "object" }` when you have none). A `policies` entry has a
    `role` (`baseline` or `tightening`), the one `tool` it governs, its `mode`, a `rationale` (1 to 500
-   characters) and the `assessment`. At most 50 tools and 50 policies; for more, propose in several plans.
+   characters) and the `assessment`. Give each policy a short plain `name` (1 to 200 characters), such as
+   "Issue a company card — a person approves": it is the label a reviewer sees, and without it the deployment
+   assigns an opaque id. A `description` (up to 2000 characters) is optional. At most 50 tools and 50 policies; for more, propose in several plans.
 
    Show the user the plan, then check it without sending anything:
 
