@@ -5,8 +5,8 @@ resume. This repository builds and tests `@noblecloak/langgraph`, the adapter th
 tool calls under a NobleCloak deployment's policy, with the example that proves it end to end, the skill that
 sets it up in an existing project, and the tooling around them.
 
-**Status:** private, with fresh history, until the public release. `@noblecloak/langgraph` is at 0.3.9 and
-nothing is published from this repository yet. Licensed under Apache-2.0 (`LICENSE`, `NOTICE`).
+**Status:** private, with fresh history, until the public release. `@noblecloak/langgraph` is published on
+npm. Licensed under Apache-2.0 (`LICENSE`, `NOTICE`).
 
 ## What is here
 
