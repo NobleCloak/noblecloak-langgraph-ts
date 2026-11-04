@@ -28,6 +28,7 @@ interface Step {
 type Permissions = Record<string, string> | string;
 interface Job {
   name?: string;
+  env?: Record<string, string>;
   needs?: string | string[];
   environment?: string | { name?: string; url?: string };
   if?: string;
@@ -37,6 +38,7 @@ interface Job {
 }
 interface Workflow {
   permissions?: Permissions;
+  env?: Record<string, string>;
   jobs: Record<string, Job>;
 }
 
@@ -465,12 +467,24 @@ const REGISTRY_READERS: Record<string, readonly string[]> = {
   'publish.yml': ['pack', 'version'],
 };
 
+/** An environment variable that carries a registry credential or points npm or bun at another registry. */
+const REGISTRY_ENV = /^(?:NODE_AUTH_TOKEN|BUN_CONFIG_REGISTRY|npm_config_\w*registry\w*)$/i;
+const registryEnvNames = (env: Record<string, string> | undefined): string[] =>
+  Object.keys(isPlainMap(env) ? env : {}).filter((key) => REGISTRY_ENV.test(key));
+/** A step that installs from the registry: `bun install ...` or `bun run exercise:skill`. */
+const isInstallStep = (step: Step): boolean => {
+  const run = (step.run ?? '').trim();
+  return /^bun install\b/.test(run) || run === 'bun run exercise:skill';
+};
 /**
  * Where an install would carry a registry credential. The contract packages come from registry.npmjs.org, so
  * no registry reader may hold a `packages` grant at all (a job-level block replaces the inherited one, so each
  * must also hold `contents` beside whatever else it has), and no `bun install` step and no
- * `bun run exercise:skill` step may set `NODE_AUTH_TOKEN`. Returns `<file>:<job>` or `<file>:<job>:<run>` per
- * gap.
+ * `bun run exercise:skill` step may set `NODE_AUTH_TOKEN`. Beyond that, a registry reader must not meet a
+ * registry credential or override at any level: the workflow's `env`, the job's `env` or a step's `env` may not
+ * name `NODE_AUTH_TOKEN`, `BUN_CONFIG_REGISTRY` or any `NPM_CONFIG_*REGISTRY*` variable (either case), and no
+ * step may pass `registry-url` to `actions/setup-node`, which writes an `.npmrc` for the registry. Returns
+ * `<file>:<job>`, `<file>:<job>:<run>`, `<file>:<job>:<level> env <name>` or `<file>:<job>:registry-url` per gap.
  */
 const registryReadViolations = (files: Record<string, Workflow>): string[] => {
   const found: string[] = [];
@@ -484,13 +498,23 @@ const registryReadViolations = (files: Record<string, Workflow>): string[] => {
       const permissions = isPlainMap(job.permissions) ? job.permissions : {};
       if (permissions.packages !== undefined || permissions.contents === undefined)
         found.push(`${file}:${name}`);
+      for (const key of registryEnvNames(files[file]?.env))
+        found.push(`${file}:${name}:workflow env ${key}`);
+      for (const key of registryEnvNames(job.env)) found.push(`${file}:${name}:job env ${key}`);
+      for (const step of job.steps ?? []) {
+        for (const key of registryEnvNames(step.env))
+          if (key.toUpperCase() !== 'NODE_AUTH_TOKEN' || !isInstallStep(step))
+            found.push(`${file}:${name}:step env ${key}`);
+        if (isPlainMap(step.with) && step.with['registry-url'] !== undefined)
+          found.push(`${file}:${name}:registry-url`);
+      }
     }
   }
   for (const [file, workflow] of Object.entries(files)) {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       for (const step of job.steps ?? []) {
         const run = (step.run ?? '').trim();
-        if (!/^bun install\b/.test(run) && run !== 'bun run exercise:skill') continue;
+        if (!isInstallStep(step)) continue;
         if (step.env?.NODE_AUTH_TOKEN !== undefined) found.push(`${file}:${name}:${run}`);
       }
     }
@@ -924,6 +948,30 @@ describe('workflows', () => {
       'publish.yml:pack:bun install --frozen-lockfile',
       'publish.yml:version:bun install --frozen-lockfile --ignore-scripts',
     ]);
+
+    const leaky = workflows();
+    const gateWorkflow = leaky['ci.yml'];
+    if (gateWorkflow === undefined) throw new Error('ci.yml missing');
+    gateWorkflow.env = { NODE_AUTH_TOKEN: 'x', npm_config_registry: 'https://example.com' };
+    job(leaky, 'publish.yml', 'pack').env = { BUN_CONFIG_REGISTRY: 'https://example.com' };
+    job(leaky, 'publish.yml', 'version').env = { NPM_CONFIG_USERCONFIG_REGISTRY_X: 'y' };
+    const skillStep = job(leaky, 'ci.yml', 'skill').steps?.[0];
+    if (skillStep === undefined) throw new Error('ci.yml:skill has no steps');
+    skillStep.env = { Npm_Config_Registry: 'https://example.com' };
+    const gateSteps = job(leaky, 'ci.yml', 'gate').steps ?? [];
+    gateSteps.push({ uses: 'actions/setup-node', with: { 'registry-url': 'https://example.com' } });
+    expect(registryReadViolations(leaky).sort()).toEqual(
+      [
+        'ci.yml:gate:workflow env NODE_AUTH_TOKEN',
+        'ci.yml:gate:workflow env npm_config_registry',
+        'ci.yml:skill:workflow env NODE_AUTH_TOKEN',
+        'ci.yml:skill:workflow env npm_config_registry',
+        'ci.yml:skill:step env Npm_Config_Registry',
+        'ci.yml:gate:registry-url',
+        'publish.yml:pack:job env BUN_CONFIG_REGISTRY',
+        'publish.yml:version:job env NPM_CONFIG_USERCONFIG_REGISTRY_X',
+      ].sort()
+    );
   });
 
   it('a job that holds a write scope installs only under --ignore-scripts', () => {

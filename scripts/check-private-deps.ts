@@ -7,9 +7,13 @@
  * - a dependency (any of the four dependency fields, including npm: aliases) whose specifier is not a
  *   registry version or range: a URL other than `registry.npmjs.org`, a git or `github:` shorthand, or any
  *   `file:`/`link:` path;
- * - in an .npmrc or bunfig.toml, any URL other than `registry.npmjs.org` and any scope-to-registry mapping
- *   (`<scope>:registry=...` in .npmrc, `"<scope>" = ...` in bunfig.toml), even one that names the public
- *   registry; a URL other than `registry.npmjs.org` in `publishConfig.registry`;
+ * - in an .npmrc or bunfig.toml, any URL other than `registry.npmjs.org` and any `registry` setting whose value
+ *   is not exactly `https://registry.npmjs.org` (so `registry=${VAR}` is flagged);
+ * - in an .npmrc, any scope-to-registry mapping (`<scope>:registry=...`), even one that names the public
+ *   registry, and any key that holds a `${` (npm expands `${K}=${V}` into a mapping);
+ * - in a bunfig.toml, any `[install.scopes]` or `[install.registry]` table, any `install.scopes` or
+ *   `install.registry` dotted key, and any `"@scope" = ...` line, whatever it maps to, even the public registry;
+ *   a URL other than `registry.npmjs.org` in `publishConfig.registry`;
  * - a credential: in an .npmrc, any `_auth`, `_authToken` or `_password` line; in a bunfig.toml, a `username`,
  *   a `password` or a `token`;
  * - a bun.lock package entry that bun resolved other than by version or as a workspace (a path, `file:`,
@@ -61,6 +65,27 @@ const BUNFIG_AUTH_LINE = /\b(?:username|password|token)\s*=/;
 
 /** Any scope mapping: `@scope:registry=` in an .npmrc, `"@scope" =` or `@scope =` in a bunfig.toml. */
 const ANY_SCOPE_MAPPING = /^\s*(?:@[^:\s]+:registry\s*=|"?@[^"\s=]+"?\s*=)/;
+
+/**
+ * The bunfig.toml forms that map a scope or set the registry as a table or dotted key: a `[install.scopes]` or
+ * `[install.registry]` table header (optionally quoted, optionally with a sub-table), an `install.scopes` or
+ * `install.registry` dotted key, and a bare `scopes` key inside `[install]`.
+ */
+const BUNFIG_REGISTRY_TABLE =
+  /^\s*\[\s*"?install"?\s*\.\s*"?(?:scopes|registry)"?\s*(?:\.[^\]]*)?\]|^\s*"?install"?\s*\.\s*"?(?:scopes|registry)"?\s*[.=]|^\s*"?scopes"?\s*[.=]/;
+
+/** An .npmrc line whose key (before the first `=`) holds an environment expansion, such as `${K}=${V}`. */
+const NPMRC_EXPANDED_KEY = /^\s*(?![#;])[^=]*\$\{[^=]*=/;
+
+/** An unscoped `registry` setting: `registry=<value>` in an .npmrc, `registry = <value>` in a bunfig.toml. */
+const REGISTRY_SETTING = /^\s*registry\s*=\s*(.*?)\s*$/;
+
+/** True when a line sets `registry` to anything but the public registry (an optional trailing slash is fine). */
+function setsOtherRegistry(line: string): boolean {
+  const value = REGISTRY_SETTING.exec(line)?.[1];
+  if (value === undefined) return false;
+  return !/^(["']?)https:\/\/registry\.npmjs\.org\/?\1$/i.test(value);
+}
 
 /** Any `scheme://host` in a line; the host decides whether it is the public registry. */
 const URL_IN_LINE = /\b[a-z][a-z+.-]*:\/\/([^\s/"'\\]+)/gi;
@@ -190,7 +215,13 @@ function checkConfigFile(file: string, text: string): Violation[] {
     if (isBunfig && BUNFIG_AUTH_LINE.test(line)) {
       violations.push({ file, key, kind: 'npm-auth-token' });
     }
-    if (hasForeignUrl(line) || ANY_SCOPE_MAPPING.test(line)) {
+    if (
+      hasForeignUrl(line) ||
+      ANY_SCOPE_MAPPING.test(line) ||
+      setsOtherRegistry(line) ||
+      (isBunfig && BUNFIG_REGISTRY_TABLE.test(line)) ||
+      (isNpmrc && NPMRC_EXPANDED_KEY.test(line))
+    ) {
       violations.push({ file, key, kind: 'foreign-registry' });
     }
   });
