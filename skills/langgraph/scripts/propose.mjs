@@ -14,6 +14,8 @@
 // The plan file is smaller than the proposal. `agent` carries `principal_id` (the service principal's id as
 // `GET /v1/principals` lists it); its `id` comes from `agent.json`, and a plan that names another is refused; `tools` are `POST /v1/tools`
 // bodies (`owner_kind` defaults to `org`); each `policies` entry is `{ role, tool, mode, rationale, assessment }` plus an optional `name` and `description`.
+// A tool may carry `facts` (rev 16 `ToolWrite.facts`, checked below as `ToolFacts`); a deployment that does not
+// serve `tools.facts` refuses them as `proposal_refused` `shape`. The proposed policy's `config` is `mode` only.
 // The script fills in the rest of each policy (kind, subject, target) and checks the built proposal against the
 // rules of `PolicySetProposal` before it sends anything. The deployment checks them again. A real run then reads the
 // policies already in force (`GET /v1/policies`, with the builder's token; read only) before it declares the agent or
@@ -104,7 +106,50 @@ const TOOL_KEYS = [
   'side_effect_level',
   'owner_kind',
   'show_arguments_to_approvers',
+  'facts',
 ];
+// `ToolWrite.facts` (contract rev 16, `@noblecloak/spec` 0.11.0 `ToolFacts` / `FactBinding`): the facts a tool
+// declares, by name, each read by the deployment from the arguments of the call it decides.
+const FACT_NAME_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
+const FACT_PATH_PATTERN = /^(\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])+$/;
+const FACT_TYPES = ['number', 'string', 'boolean', 'count'];
+const FACT_KEYS = ['path', 'type', 'description'];
+const MAX_FACTS = 32;
+const FACT_PATH_MAX = 512;
+const FACT_DESCRIPTION_MAX = 500;
+
+/** The problems with a tool's `facts` at `path`: empty when it is a valid `ToolFacts`. */
+function factsProblems(facts, path) {
+  if (!isObject(facts)) return [`${path} must be an object`];
+  const problems = [];
+  const names = Object.keys(facts);
+  if (names.length > MAX_FACTS) problems.push(`${path} must declare at most ${MAX_FACTS} facts`);
+  for (const name of names) {
+    const at = `${path}.${name}`;
+    if (!FACT_NAME_PATTERN.test(name))
+      problems.push(`${at}: a fact name is a lower-case letter then up to 62 of a-z, 0-9 and _`);
+    const fact = facts[name];
+    if (!isObject(fact)) {
+      problems.push(`${at} must be an object`);
+      continue;
+    }
+    problems.push(...unknownMembers(fact, FACT_KEYS, at));
+    if (typeof fact.path !== 'string' || !FACT_PATH_PATTERN.test(fact.path))
+      problems.push(
+        `${at}.path must be .key and [N] segments from the root, such as .amount or .lines[0].price`
+      );
+    else if (textLength(fact.path) > FACT_PATH_MAX)
+      problems.push(`${at}.path must be at most ${FACT_PATH_MAX} characters`);
+    if (!FACT_TYPES.includes(fact.type))
+      problems.push(`${at}.type must be one of ${FACT_TYPES.join(', ')}`);
+    if (fact.description !== undefined) {
+      if (typeof fact.description !== 'string') problems.push(`${at}.description must be a string`);
+      else if (textLength(fact.description) > FACT_DESCRIPTION_MAX)
+        problems.push(`${at}.description must be at most ${FACT_DESCRIPTION_MAX} characters`);
+    }
+  }
+  return problems;
+}
 const ASSESSMENT_KEYS = [
   'side_effect_level',
   'blast_radius',
@@ -232,6 +277,7 @@ export function validateProposal(proposal) {
         typeof tool.show_arguments_to_approvers !== 'boolean'
       )
         problems.push(`${path}.show_arguments_to_approvers must be true or false`);
+      if (tool.facts !== undefined) problems.push(...factsProblems(tool.facts, `${path}.facts`));
     });
   }
 
@@ -329,8 +375,13 @@ export function describeProposal(proposal) {
         ? ' (binding left as it is)'
         : `, bound to service principal ${proposal.agent.principal_id}`),
   ];
-  for (const tool of proposal.tools ?? [])
-    lines.push(`Register ${tool.tool_ref} (${tool.side_effect_level}) for the organisation`);
+  for (const tool of proposal.tools ?? []) {
+    const facts = isObject(tool.facts) ? Object.keys(tool.facts) : [];
+    lines.push(
+      `Register ${tool.tool_ref} (${tool.side_effect_level}) for the organisation` +
+        (facts.length > 0 ? `, declaring facts: ${facts.join(', ')}` : '')
+    );
+  }
   for (const entry of proposal.policies) {
     const [target] = entry.policy.targets.tools;
     const who = entry.role === 'baseline' ? 'everyone' : 'this agent';
