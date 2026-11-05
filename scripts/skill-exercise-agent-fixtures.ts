@@ -7,10 +7,10 @@
 
 /** Pinned as `examples/langgraph-approvals/package.json` pins them (a test checks the two agree). */
 export const PINNED_DEPENDENCIES: Readonly<Record<string, string>> = {
-  '@langchain/core': '1.3.0',
-  '@langchain/langgraph': '1.5.2',
+  '@langchain/core': '1.3.4',
+  '@langchain/langgraph': '1.6.1',
   '@langchain/langgraph-checkpoint-sqlite': '1.1.0',
-  langchain: '1.5.19',
+  langchain: '1.6.1',
   zod: '4.6.7',
 };
 
