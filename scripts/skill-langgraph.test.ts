@@ -91,6 +91,7 @@ const must = <T>(value: T | undefined): T => {
 const fixtureProposal = (): Json =>
   structuredClone(must(propose.buildProposal(FIXTURE_PLAN, 'agent_1').proposal));
 const entriesOf = (proposal: Json): Json[] => proposal.policies as Json[];
+const firstTool = (proposal: Json): Json => must((proposal.tools as Json[])[0]);
 const policyOf = (entry: Json): Json => entry.policy as Json;
 
 describe('the skill in the exercise', () => {
@@ -811,6 +812,93 @@ describe('propose.mjs: validateProposal', () => {
     ]);
   });
 
+  describe('tool facts (ToolFacts / FactBinding, spec 0.11.0)', () => {
+    const at = 'action.arguments.tools[0].facts';
+    const withFacts = (facts: unknown): string[] => problemsOf((p) => (firstTool(p).facts = facts));
+
+    it('accepts well-formed facts of every type, with and without a description', () => {
+      expect(
+        withFacts({
+          amount: { path: '.amount', type: 'number', description: 'Refund total' },
+          env: { path: '.target.env', type: 'string' },
+          dry_run: { path: '.dry_run', type: 'boolean' },
+          lines: { path: '.lines', type: 'count' },
+          first_price: { path: '.lines[0].price', type: 'number' },
+        })
+      ).toEqual([]);
+    });
+
+    it('holds the facts to an object of at most 32 names', () => {
+      expect(withFacts([])).toEqual([`${at} must be an object`]);
+      const many = (n: number) =>
+        Object.fromEntries(
+          Array.from({ length: n }, (_, i) => [`f${String(i)}`, { path: '.a', type: 'number' }])
+        );
+      expect(withFacts(many(32))).toEqual([]);
+      expect(withFacts(many(33))).toEqual([`${at} must declare at most 32 facts`]);
+    });
+
+    it('holds a name to ^[a-z][a-z0-9_]{0,62}$', () => {
+      const fact = { path: '.a', type: 'number' };
+      expect(withFacts({ [`a${'b'.repeat(62)}`]: fact })).toEqual([]);
+      for (const name of [`a${'b'.repeat(63)}`, 'Amount', '1abc', 'a-b', '_a'])
+        expect(withFacts({ [name]: fact })).toEqual([
+          `${at}.${name}: a fact name is a lower-case letter then up to 62 of a-z, 0-9 and _`,
+        ]);
+    });
+
+    it('holds a path to .key and [N] segments, at most 512 characters', () => {
+      const path = (value: unknown) => withFacts({ a: { path: value, type: 'number' } });
+      const refused = [
+        `${at}.a.path must be .key and [N] segments from the root, such as .amount or .lines[0].price`,
+      ];
+      for (const ok of ['.amount', '.target.env', '.lines[0].price', '[0]', '._x-y'])
+        expect(path(ok)).toEqual([]);
+      for (const bad of ['amount', '', '.lines[*]', '..amount', '.a[-1]', '.1a', '.a.', 5])
+        expect(path(bad)).toEqual(refused);
+      expect(path(`.${'a'.repeat(511)}`)).toEqual([]);
+      expect(path(`.${'a'.repeat(512)}`)).toEqual([`${at}.a.path must be at most 512 characters`]);
+    });
+
+    it('holds a type to number, string, boolean or count, and a description to 500 characters', () => {
+      expect(withFacts({ a: { path: '.a', type: 'integer' } })).toEqual([
+        `${at}.a.type must be one of number, string, boolean, count`,
+      ]);
+      expect(withFacts({ a: { path: '.a' } })).toEqual([
+        `${at}.a.type must be one of number, string, boolean, count`,
+      ]);
+      expect(
+        withFacts({ a: { path: '.a', type: 'number', description: 'x'.repeat(500) } })
+      ).toEqual([]);
+      expect(
+        withFacts({ a: { path: '.a', type: 'number', description: 'x'.repeat(501) } })
+      ).toEqual([`${at}.a.description must be at most 500 characters`]);
+      expect(withFacts({ a: { path: '.a', type: 'number', description: 4 } })).toEqual([
+        `${at}.a.description must be a string`,
+      ]);
+    });
+
+    it('refuses a fact that is not an object and a member the binding does not have', () => {
+      expect(withFacts({ a: 'x' })).toEqual([`${at}.a must be an object`]);
+      expect(withFacts({ a: { path: '.a', type: 'number', op: 'gt' } })).toEqual([
+        `${at}.a.op is not a member of this object`,
+      ]);
+    });
+
+    it('builds facts from the plan into the proposal and names them in the preview', () => {
+      const facts = { amount: { path: '.amount', type: 'number' } };
+      const copy = structuredClone(FIXTURE_PLAN) as unknown as Json;
+      firstTool(copy).facts = facts;
+      const { proposal } = propose.buildProposal(copy, 'agent_1');
+      expect(firstTool(must(proposal)).facts).toEqual(facts);
+      expect(propose.validateProposal(proposal)).toEqual([]);
+      expect(propose.describeProposal(must(proposal))).toContain(
+        'Register ext:billing:issue_refund (external) for the organisation, declaring facts: amount'
+      );
+      expect(propose.describeProposal(fixtureProposal())).not.toContain('declaring facts');
+    });
+  });
+
   it('allows at most 50 tools and 50 policies', () => {
     expect(problemsOf((p) => (p.tools = Array.from({ length: 51 }, () => ({}))))[0]).toContain(
       'action.arguments.tools must be a list of at most 50'
@@ -1402,6 +1490,39 @@ describe('propose.mjs: the command', () => {
     expect(howTo.replace(/\s+/g, ' ')).toMatch(
       /`ask` for everything else \(an `external` or `admin` tool/
     );
+  });
+
+  it('documents tool facts with an example the script accepts, and says a proposal carries mode only', () => {
+    const skill = readFileSync(join(SKILL, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    const example = /"facts": (\{ "amount": \{[^}]*\} \})/.exec(skill)?.[1];
+    expect(example).toBeDefined();
+    const copy = structuredClone(FIXTURE_PLAN) as unknown as Json;
+    firstTool(copy).facts = JSON.parse(example ?? '{}');
+    const { proposal } = propose.buildProposal(copy, 'agent_1');
+    expect(propose.validateProposal(must(proposal))).toEqual([]);
+    expect(skill).toContain('`config` is `mode` only in rev 16');
+    expect(skill).toContain('`proposal_refused` with `code` `shape`; `member` names the facts');
+    expect(skill).not.toContain('member `shape`');
+  });
+
+  it('says facts of an already registered tool are set with PATCH /v1/tools', () => {
+    const skill = readFileSync(join(SKILL, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(skill).toContain('`PATCH /v1/tools/{ref}` (`facts`)');
+    expect(skill).toContain('`tool_ref_in_use`');
+  });
+
+  it('says an unevaluable rule makes this policy ask and a false condition skips the rule', () => {
+    const skill = readFileSync(join(SKILL, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(skill).toContain('A rule with a false condition is skipped');
+    expect(skill).toContain("makes this policy's result `ask`");
+    expect(skill).not.toContain('makes the call `ask`');
+  });
+
+  it('sends rules to the published policy, not a new one', () => {
+    const skill = readFileSync(join(SKILL, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(skill).toContain('`PUT /v1/policies/{id}` followed by `POST /v1/policies/{id}/publish`');
+    expect(skill).not.toContain('`POST /v1/policies`');
+    expect(skill).toContain('cannot loosen it');
   });
 
   it('ships only files the skill describes: two scripts, four templates and SKILL.md', () => {

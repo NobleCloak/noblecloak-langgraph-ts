@@ -168,6 +168,46 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
    answer it rests on, for example: "Issues a refund to a customer: money leaves the organisation and cannot be
    recalled, so a person approves each one."
 
+   **When the risk depends on the arguments.** The rubric above gives one mode per tool. Keep it as the default.
+   Reach for rules only when the builder names a threshold that depends on what the call carries ("refunds over
+   $500 are denied, under $20 go through, in between a person approves"). Contract rev 16 (`@noblecloak/spec`
+   0.11.0, `@noblecloak/client` 0.12.0) lets a tool declare **facts** and a policy carry **rules** over them:
+   - A fact is a named value the deployment reads from the arguments of the call it decides: `{ path, type }`,
+     where `path` is `.key` and `[N]` segments from the root of the arguments (`.amount`, `.target.env`,
+     `.lines[0].price`) and `type` is `number`, `string`, `boolean` or `count` (the length of an array). Nothing is
+     coerced: a path that selects nothing, or a value of another type, leaves the fact with no value. Declare the
+     field the risk depends on (an amount, a recipient count, an environment), at most 32 facts per tool.
+   - A rule is `{ when, then }`: `when` is up to 8 conditions that must all hold (`eq`, `ne`, `in`, `not_in`,
+     `gt`, `gte`, `lt`, `lte`, `exists`, each on a fact), `then` is `always_allow`, `ask` or `deny`, and an `ask`
+     rule may name `approvers` (a role or a named user). Rules are read in order and the first match wins; the
+     policy's `mode` applies when none matches. A rule with a false condition is skipped. A rule none of whose
+     conditions is false, but that needs a fact with no value, stops the walk and makes this policy's result `ask`
+     (to that rule's `approvers` when it is an `ask` rule that names them, else to the organisation's
+     administrators). The results of every policy that matches the call still compose tightest-wins.
+   - Put the facts on the tool in the plan (step 6), for a tool the proposal registers. A tool that is already
+     registered cannot gain facts through a proposal (it is refused `tool_ref_in_use`): an administrator sets them
+     with `PATCH /v1/tools/{ref}` (`facts`). `propose.mjs` accepts `facts` on a `tools` entry and checks it
+     as the contract's `ToolFacts` (a name is a lower-case letter then up to 62 of a-z, 0-9 and `_`; a description
+     is at most 500 characters). Facts need a deployment that serves the feature `tools.facts`: one that does not
+     refuses the proposal (`proposal_refused` with `code` `shape`; `member` names the facts), and the rule cannot be written yet. Say so to the
+     user rather than dropping the facts silently.
+   - A proposed policy's `config` is `mode` only in rev 16. The plan carries **no** rules, approvers or
+     `exclude`: after the proposal is approved, an administrator adds them to the policy the proposal published, in
+     the policy editor or with `PUT /v1/policies/{id}` followed by `POST /v1/policies/{id}/publish`. The rules
+     belong on the policy that governs the tool: a separate policy composes tightest-wins and cannot loosen it,
+     and a second policy for the same tool and subject cannot be published (`policy_conflict`). Tell the user which rules to ask for (the thresholds, the `then` of each and who
+     approves the `ask` band), and put the `mode` you would use when no rule matches in the plan.
+   - `exclude: requester` means the principal that opened the approval may not satisfy it. This adapter opens
+     approvals as the agent's service principal (`templates/governance.ts`), so `exclude: requester` does not make
+     one person approve another's work here. For "someone else must approve", route the `ask` to a role or a named
+     user with `approvers` (the deployment enforces it; `approver_groups` is stored but does not route).
+   - How the adapter takes part: a decision request (`decide`, in the adapter's `api.ts`) carries the call's real
+     `arguments`, so the deployment can read the facts. When a paused call is resumed, `consume` sends the call's
+     full arguments again and the deployment checks them against the approved call (`approval_conflict`
+     otherwise, which the adapter reports as `consume_conflict` without running the tool). A call that joins an
+     existing approval: a `pending` approval gains the requirements the joining call sets, and an `approved`
+     approval that has not been consumed is joined as it is.
+
 6. **Draft the plan and open the approval.** Write the plan to a file outside the source tree (for example
    `noblecloak-plan.json` in a scratch directory):
 
@@ -204,7 +244,9 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
    ```
 
    `tools` lists the `ext:` tools only (`transport` is `external` and `owner_kind` is `org`, filled in for you;
-   `input_schema` is the tool's JSON Schema, `{ "type": "object" }` when you have none). A `policies` entry has a
+   `input_schema` is the tool's JSON Schema, `{ "type": "object" }` when you have none; an optional `facts` object
+   declares the facts a rule needs, for example `"facts": { "amount": { "path": ".amount", "type": "number" } }`).
+   A `policies` entry has a
    `role` (`baseline` or `tightening`), the one `tool` it governs, its `mode`, a `rationale` (1 to 500
    characters) and the `assessment`. Give each policy a short plain `name` (1 to 200 characters), such as
    "Issue a company card — a person approves": it is the label a reviewer sees, and without it the deployment
@@ -244,6 +286,9 @@ Two scripts do the mechanical parts; the rest is judgement that you make, with t
 
 ## What is not here yet
 
+- It does not propose rules, approvers or `exclude`: a proposed policy carries `mode` only (contract rev 16). An
+  administrator adds them after the proposal is approved, as described under "When the risk depends on the
+  arguments".
 - The skill does not check afterwards whether the proposal was approved and applied, or refused and why. Look at
   the approval in the inbox.
 - It covers LangGraph JS only: other runtimes, and Python, are separate skills.
