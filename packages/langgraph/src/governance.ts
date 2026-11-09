@@ -261,8 +261,13 @@ export class Governance {
         'This deployment routes approvals but does not serve /v1/runs. Without a run per thread, an approval granted in one thread could satisfy an identical call in another, so the adapter will not start.'
       );
     }
-    const kinds = this.#capabilities.raw.continuation_kinds;
-    if (this.#capabilities.routesApprovals && kinds !== undefined && !kinds.includes('langgraph')) {
+    const kinds: unknown = this.#capabilities.raw.continuation_kinds;
+    // A member that is not an array is not an advertised list (as for `resolutions` and `features`).
+    if (
+      this.#capabilities.routesApprovals &&
+      Array.isArray(kinds) &&
+      !kinds.includes('langgraph')
+    ) {
       throw new GovernanceError(
         'continuation_kind_unsupported',
         `This deployment routes approvals but lists the continuation kinds it accepts (${kinds.join(', ')}) without langgraph. An approval opened here could never resume, so the adapter will not start.`

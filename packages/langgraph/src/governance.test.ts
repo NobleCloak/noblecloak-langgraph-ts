@@ -6,13 +6,13 @@ import { createHarness, status } from '../test/harness.js';
 import type { Harness } from '../test/harness.js';
 
 /** Answers `GET /v1/capabilities` (a `{data}` envelope) as the mock does, with `continuation_kinds` set to `kinds`, or removed when undefined. */
-function advertiseKinds(h: Harness, kinds: readonly string[] | undefined): void {
+function advertiseKinds(h: Harness, kinds: readonly string[] | null | undefined): void {
   h.intercept = async (request) => {
     if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
     const real = (await h.mock.app.fetch(request)).clone();
     const envelope = (await real.json()) as { data: Record<string, unknown> };
     if (kinds === undefined) delete envelope.data.continuation_kinds;
-    else envelope.data.continuation_kinds = [...kinds];
+    else envelope.data.continuation_kinds = kinds === null ? null : [...kinds];
     return new Response(JSON.stringify(envelope), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -101,6 +101,22 @@ describe('createGovernance: continuation_kinds', () => {
     await expect(h.governance.assertReady()).rejects.toMatchObject({
       code: 'continuation_kind_unsupported',
     });
+    expect(h.seen('GET', '/v1/capabilities')).toHaveLength(1);
+  });
+
+  it('an empty list advertises no kind at all: refused, not read as "not advertised"', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, []);
+    await expect(h.governance.capabilities()).rejects.toMatchObject({
+      code: 'continuation_kind_unsupported',
+    });
+  });
+
+  it('a continuation_kinds member that is not an array is not an advertised list: usable, and the answer is kept', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, null);
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
     expect(h.seen('GET', '/v1/capabilities')).toHaveLength(1);
   });
 
