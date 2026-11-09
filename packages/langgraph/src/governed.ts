@@ -245,10 +245,12 @@ export async function governCall(
         error.code === 'principal_mismatch' ||
         error.code === 'principal_unavailable')
     ) {
-      // A setup the adapter refuses to run under: said to the builder, and thrown, not turned into a denial.
-      if (error.code !== 'runs_required' && error.code !== 'continuation_kind_unsupported') {
-        governance.report(error);
-      }
+      // A setup the adapter refuses to run under: thrown, not turned into a denial. `governedToolNode` with the
+      // default `handleToolErrors` hands a thrown error to the model as a message and the graph completes, so
+      // `continuation_kind_unsupported` (like the principal codes) is also reported to the builder here;
+      // `runs_required` is not (it is thrown only). `assertReady`, `runResumer`, the middleware and
+      // `handleToolErrors: false` surface the throw itself.
+      if (error.code !== 'runs_required') governance.report(error);
       throw error;
     }
     const failure =

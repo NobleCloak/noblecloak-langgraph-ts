@@ -24,8 +24,11 @@ offers none of the three.
 
 From rev 17 a deployment may list the continuation kinds it accepts (`continuation_kinds` on `GET /v1/capabilities`).
 When it routes approvals and the list does not include `langgraph`, the adapter refuses to start
-(`continuation_kind_unsupported`), because an approval it opened could never resume. A deployment that lists no
-kinds accepts those of rev 16, `langgraph` among them, and is used as before.
+(`continuation_kind_unsupported`), because an approval it opened could never resume. `assertReady()`,
+`runResumer`, `governanceMiddleware` and `governedToolNode` with `handleToolErrors: false` throw it. The default
+`governedToolNode` reports it to `onError` and the model receives the error message as a tool error, so the graph
+completes without running the tool. A deployment that does not advertise `continuation_kinds` accepts those of rev 16,
+`langgraph` among them, and is used as before; an empty list is refused, as it names no kind.
 
 Setting up an agent's policies is a separate matter from running it. An agent's policies apply through the service
 principal bound to it, which needs a deployment at contract rev 13 or later. Opening the one approval that registers
@@ -263,8 +266,8 @@ run header and the approved arguments, and admits the call once.
 6. **A service principal can never approve.** The approver is a person signed in to the inbox.
 7. **One run per thread.** Approvals are scoped to the thread's run, so an approval in one thread never
    satisfies a call in another. A deployment that routes approvals must also serve runs, or the adapter
-   refuses to start (`runs_required`). One that lists its accepted continuation kinds without `langgraph` is
-   refused the same way (`continuation_kind_unsupported`).
+   refuses to start (`runs_required`). One that advertises its accepted continuation kinds without `langgraph` is
+   refused (`continuation_kind_unsupported`; see the paragraph on rev 17 above for how each entry point surfaces it).
 8. **One approval at a time per model turn, and nothing runs while one is pending.** If the model asks for
    several tools at once, every call is decided first. If any needs approval, the earliest in the message
    pauses the node, the other calls that need approval are returned to the model with a message to retry
