@@ -16,6 +16,13 @@ export type GovernanceErrorCode =
   | 'unknown_resolution'
   /** The deployment routes approvals but does not serve `runs`. */
   | 'runs_required'
+  /**
+   * The deployment routes approvals and lists the continuation kinds it accepts (`Capabilities.continuation_kinds`,
+   * contract rev 17), and the list does not include `langgraph`. An approval this adapter opened would carry a
+   * `langgraph` continuation the deployment refuses, so none could ever resume. A deployment that does not
+   * advertise the list accepts the kinds of rev 16, `langgraph` among them, and is not refused.
+   */
+  | 'continuation_kind_unsupported'
   /** A second call in the same task needs approval while another is pending. */
   | 'approval_pending_in_task'
   /** `/v1` could not be reached, answered 5xx, or answered something unreadable. */
