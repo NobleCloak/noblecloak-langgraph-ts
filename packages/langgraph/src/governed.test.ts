@@ -883,7 +883,8 @@ describe('governed: the decision table', () => {
   });
 
   it('a deployment whose continuation_kinds lacks langgraph: the first use throws continuation_kind_unsupported, nothing runs and no decision is asked', async () => {
-    const h = await createHarness();
+    const errors: string[] = [];
+    const h = await createHarness({ governance: { onError: (e) => errors.push(e.code) } });
     h.intercept = async (request) => {
       if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
       const envelope = (await (await h.mock.app.fetch(request)).json()) as {
@@ -901,6 +902,7 @@ describe('governed: the decision table', () => {
     await expect(
       wrapped.invoke({ type: 'tool_call', id: 'c1', name: 'search', args: { q: 'x' } }, CFG)
     ).rejects.toMatchObject({ code: 'continuation_kind_unsupported' });
+    expect(errors).toEqual(['continuation_kind_unsupported']);
     expect(counters.runs).toHaveLength(0);
     expect(h.seen('POST', '/v1/decisions')).toHaveLength(0);
     expect(h.seen('POST', '/v1/runs')).toHaveLength(0);
