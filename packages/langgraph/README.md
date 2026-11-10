@@ -18,9 +18,17 @@ bun add langchain # only for `@noblecloak/langgraph/middleware` (the `createAgen
 The middleware subpath needs `@langchain/core` `^1.2.14` (what `langchain` 1.5.15 requires); the main entry works with the peer range above.
 
 Developed against `langchain` 1.5.15, `@langchain/langgraph` 1.4.19 and `@langchain/core` 1.2.14. 1.5.15 is the `langchain` version tested; 1.5.16 and later need `@langchain/core` 1.2.17 or later. It needs a deployment that serves
-the module API at contract v1 rev 4 or later (the main entry; `gatewayTools` needs rev 7 or later), and is tested against rev 8 (release `contract-v1-rev8`; the tests run against the mock of `@noblecloak/spec`). Three behaviours it relies on arrived in rev 4: `created_by=me` on the approvals list and stream, the continuation echoed
+the module API at contract v1 rev 4 or later (the main entry; `gatewayTools` needs rev 7 or later), and is tested against rev 18 (release `contract-v1-rev18`; the tests run against the mock of `@noblecloak/spec` 0.12.0). Three behaviours it relies on arrived in rev 4: `created_by=me` on the approvals list and stream, the continuation echoed
 to the principal that created an approval, and the service-principal visibility rule. A deployment older than rev 4
 offers none of the three.
+
+From rev 17 a deployment may list the continuation kinds it accepts (`continuation_kinds` on `GET /v1/capabilities`).
+When it routes approvals and the list does not include `langgraph`, the adapter refuses to start
+(`continuation_kind_unsupported`), because an approval it opened could never resume. `assertReady()`,
+`runResumer`, `governanceMiddleware` and `governedToolNode` with `handleToolErrors: false` throw it. The default
+`governedToolNode` reports it to `onError` and the model receives the error message as a tool error, so the graph
+completes without running the tool. A deployment that does not advertise `continuation_kinds` accepts those of rev 16,
+`langgraph` among them, and is used as before; an empty list is refused, as it names no kind.
 
 Setting up an agent's policies is a separate matter from running it. An agent's policies apply through the service
 principal bound to it, which needs a deployment at contract rev 13 or later. Opening the one approval that registers
@@ -258,7 +266,8 @@ run header and the approved arguments, and admits the call once.
 6. **A service principal can never approve.** The approver is a person signed in to the inbox.
 7. **One run per thread.** Approvals are scoped to the thread's run, so an approval in one thread never
    satisfies a call in another. A deployment that routes approvals must also serve runs, or the adapter
-   refuses to start (`runs_required`).
+   refuses to start (`runs_required`; reported to `onError` and thrown, so a default `governedToolNode` shows the model the message and the graph completes). One that advertises its accepted continuation kinds without `langgraph` is
+   refused (`continuation_kind_unsupported`; see the paragraph on rev 17 above for how each entry point surfaces it).
 8. **One approval at a time per model turn, and nothing runs while one is pending.** If the model asks for
    several tools at once, every call is decided first. If any needs approval, the earliest in the message
    pauses the node, the other calls that need approval are returned to the model with a message to retry
@@ -377,7 +386,7 @@ run header and the approved arguments, and admits the call once.
     final answer was delivered. The cause is reported to `onError`. A failure of `/v1/decisions`, of
     `/v1/runs` or of the capabilities read on a re-run is still a denial: the approval stays approved and
     unconsumed, and the model's retry of that call is refused until the approval is withdrawn or expires.
-17. **How a supervisor learns the worker stopped.** `runResumer` rejects at start-up (`runs_required`,
+17. **How a supervisor learns the worker stopped.** `runResumer` rejects at start-up (`runs_required`, `continuation_kind_unsupported`,
     `not_owner`, `principal_mismatch`, `principal_unavailable`, an unreachable stream). A worker that stops itself while running does so once, with
     `not_owner` (15): it calls `onFatal(error)` and resolves `handle.failed` with the same error, and looks
     at nothing afterwards; it never restarts itself, so a supervisor restarts it with the right credentials.

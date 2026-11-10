@@ -249,7 +249,8 @@ export class Governance {
   /**
    * Reads `GET /v1/capabilities` once and keeps the answer. A failed read is not kept: it throws
    * `unreachable`, and the next call reads again. Throws `runs_required` whenever the deployment
-   * routes approvals but does not serve runs.
+   * routes approvals but does not serve runs, and `continuation_kind_unsupported` whenever it routes
+   * approvals and its `continuation_kinds` list, when it advertises one, lacks `langgraph`.
    */
   async capabilities(): Promise<ServerCapabilities> {
     if (this.#expectedPrincipal !== undefined) await this.assertPrincipal(this.#expectedPrincipal);
@@ -258,6 +259,18 @@ export class Governance {
       throw new GovernanceError(
         'runs_required',
         'This deployment routes approvals but does not serve /v1/runs. Without a run per thread, an approval granted in one thread could satisfy an identical call in another, so the adapter will not start.'
+      );
+    }
+    const kinds: unknown = this.#capabilities.raw.continuation_kinds;
+    // A member that is not an array is not an advertised list (as for `resolutions` and `features`).
+    if (
+      this.#capabilities.routesApprovals &&
+      Array.isArray(kinds) &&
+      !kinds.includes('langgraph')
+    ) {
+      throw new GovernanceError(
+        'continuation_kind_unsupported',
+        `This deployment routes approvals but ${kinds.length === 0 ? 'advertises an empty list of continuation kinds' : `lists the continuation kinds it accepts (${kinds.join(', ')}) without langgraph`}. An approval opened here could never resume, so the adapter will not start.`
       );
     }
     return this.#capabilities;

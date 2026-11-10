@@ -108,15 +108,15 @@ describe('the skill in the exercise', () => {
       version: string;
     };
     expect(contractVersions(ROOT)).toEqual({
-      '@noblecloak/client': '0.11.1',
-      '@noblecloak/spec': '0.10.1',
+      '@noblecloak/client': '0.13.0',
+      '@noblecloak/spec': '0.12.0',
     });
     expect(sources).toEqual([
       {
         kind: 'registry',
         name: '@noblecloak/client',
-        file: 'noblecloak-client-0.11.1.tgz',
-        version: '0.11.1',
+        file: 'noblecloak-client-0.13.0.tgz',
+        version: '0.13.0',
       },
       {
         kind: 'packed',
@@ -134,7 +134,7 @@ describe('the skill in the exercise', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
       writeFileSync(
         join(root, 'contract.json'),
-        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.11.1' } } })
+        JSON.stringify({ packages: { '@noblecloak/client': { version: '0.13.0' } } })
       );
       const manifest = (dependencies: Record<string, string>): void => {
         writeFileSync(
@@ -142,14 +142,14 @@ describe('the skill in the exercise', () => {
           JSON.stringify({ name: '@noblecloak/a', version: '1.0.0', dependencies })
         );
       };
-      manifest({ '@noblecloak/client': '0.11.1', 'plain-lib': '1.2.3' });
+      manifest({ '@noblecloak/client': '0.13.0', 'plain-lib': '1.2.3' });
       expect(tarballSources(root, '@noblecloak/a').map((source) => source.name)).toEqual([
         '@noblecloak/a',
         '@noblecloak/client',
       ]);
       manifest({ '@noblecloak/client': '0.10.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
-        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.11.1'
+        '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.13.0'
       );
       manifest({ '@noblecloak/other': '1.0.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
@@ -238,14 +238,14 @@ describe('the skill in the exercise', () => {
           {
             kind: 'registry',
             name: '@noblecloak/client',
-            file: 'noblecloak-client-0.11.1.tgz',
-            version: '0.11.1',
+            file: 'noblecloak-client-0.13.0.tgz',
+            version: '0.13.0',
           },
         ],
         out,
         (command, args, cwd, env) => {
           calls.push({ command, args, cwd, env });
-          writeFileSync(join(out, 'noblecloak-client-0.11.1.tgz'), 'fetched');
+          writeFileSync(join(out, 'noblecloak-client-0.13.0.tgz'), 'fetched');
         }
       );
       expect(readFileSync(join(out, 'noblecloak-langgraph-1.0.0.tgz'), 'utf8')).toBe('packed');
@@ -254,7 +254,7 @@ describe('the skill in the exercise', () => {
           command: 'npm',
           args: [
             'pack',
-            '@noblecloak/client@0.11.1',
+            '@noblecloak/client@0.13.0',
             '--pack-destination',
             out,
             '--registry',
@@ -273,14 +273,14 @@ describe('the skill in the exercise', () => {
             {
               kind: 'registry',
               name: '@noblecloak/spec',
-              file: 'noblecloak-spec-0.10.1.tgz',
-              version: '0.10.1',
+              file: 'noblecloak-spec-0.12.0.tgz',
+              version: '0.12.0',
             },
           ],
           out,
           () => undefined
         );
-      }).toThrow(`npm pack @noblecloak/spec@0.10.1 left no noblecloak-spec-0.10.1.tgz in ${out}`);
+      }).toThrow(`npm pack @noblecloak/spec@0.12.0 left no noblecloak-spec-0.12.0.tgz in ${out}`);
     } finally {
       if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
       else process.env.NODE_AUTH_TOKEN = saved;

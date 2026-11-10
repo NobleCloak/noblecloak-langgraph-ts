@@ -241,11 +241,16 @@ export async function governCall(
     if (
       error instanceof GovernanceError &&
       (error.code === 'runs_required' ||
+        error.code === 'continuation_kind_unsupported' ||
         error.code === 'principal_mismatch' ||
         error.code === 'principal_unavailable')
     ) {
-      // A setup the adapter refuses to run under: said to the builder, and thrown, not turned into a denial.
-      if (error.code !== 'runs_required') governance.report(error);
+      // A setup the adapter refuses to run under: thrown, not turned into a denial, and reported to the builder
+      // first. `governedToolNode` with the default `handleToolErrors` hands a thrown error to the model as a
+      // message and the graph completes, so the report is how the builder hears it there. The middleware and
+      // `handleToolErrors: false` (which also come through here) surface the throw itself as well; `assertReady`
+      // and `runResumer` start-up do not come through here and only throw.
+      governance.report(error);
       throw error;
     }
     const failure =

@@ -499,20 +499,59 @@ describe.each(ENTRY_POINTS)('through %s', (name) => {
   });
 
   describe('conformance: runs', () => {
-    it('approvals advertised without runs → runs_required, and nothing runs', async () => {
-      const w = await world({ script: SEND, advertise: ['approvals', 'records'] });
+    it('approvals advertised without runs → runs_required, reported to onError, and nothing runs', async () => {
+      const errors: string[] = [];
+      const w = await world({
+        script: SEND,
+        advertise: ['approvals', 'records'],
+        governance: { onError: (e) => errors.push(e.code) },
+      });
       const run = w.agent.graph.invoke(start(), THREAD);
       if (name.startsWith('governanceMiddleware')) {
         // The middleware never turns a GovernanceError into a message for the model: the run fails.
         await expect(run).rejects.toMatchObject({ name: 'GovernanceError' });
       } else {
-        // The tool node reports a thrown tool error to the model; what matters is that nothing ran or paused.
+        // The tool node hands a thrown tool error to the model and the graph completes; the builder still hears it.
         await run;
       }
+      expect(errors).toEqual(['runs_required']);
       expect(w.counters.runs).toHaveLength(0);
       expect(await w.paused()).toBe(false);
       await expect(w.agent.governance.assertReady()).rejects.toMatchObject({
         code: 'runs_required',
+      });
+      expect(w.h.seen('POST', '/v1/decisions')).toHaveLength(0);
+    });
+
+    it('a continuation_kinds list without langgraph → continuation_kind_unsupported, reported to onError, and nothing runs', async () => {
+      const errors: string[] = [];
+      const w = await world({
+        script: SEND,
+        governance: { onError: (e) => errors.push(e.code) },
+      });
+      w.h.intercept = async (request) => {
+        if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
+        const envelope = (await (await w.h.mock.app.fetch(request)).json()) as {
+          data: Record<string, unknown>;
+        };
+        envelope.data.continuation_kinds = ['adk', 'claude_agent_sdk'];
+        return new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+      const run = w.agent.graph.invoke(start(), THREAD);
+      if (name.startsWith('governanceMiddleware')) {
+        await expect(run).rejects.toMatchObject({ name: 'GovernanceError' });
+      } else {
+        // The tool node hands a thrown tool error to the model and the graph completes; the builder still hears it.
+        await run;
+      }
+      expect(errors).toEqual(['continuation_kind_unsupported']);
+      expect(w.counters.runs).toHaveLength(0);
+      expect(await w.paused()).toBe(false);
+      await expect(w.agent.governance.assertReady()).rejects.toMatchObject({
+        code: 'continuation_kind_unsupported',
       });
       expect(w.h.seen('POST', '/v1/decisions')).toHaveLength(0);
     });

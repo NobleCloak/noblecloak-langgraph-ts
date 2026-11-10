@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { GovernanceError } from './errors.js';
 import { createGovernance, principalOfToken } from './governance.js';
 import { createHarness, status } from '../test/harness.js';
+import type { Harness } from '../test/harness.js';
+
+/** Answers `GET /v1/capabilities` (a `{data}` envelope) as the mock does, with `continuation_kinds` set to `kinds`, or removed when undefined. */
+function advertiseKinds(h: Harness, kinds: readonly string[] | null | undefined): void {
+  h.intercept = async (request) => {
+    if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
+    const real = (await h.mock.app.fetch(request)).clone();
+    const envelope = (await real.json()) as { data: Record<string, unknown> };
+    if (kinds === undefined) delete envelope.data.continuation_kinds;
+    else envelope.data.continuation_kinds = kinds === null ? null : [...kinds];
+    return new Response(JSON.stringify(envelope), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+}
 
 describe('createGovernance: capabilities', () => {
   it('reads /v1/capabilities once, lazily, and keeps the answer', async () => {
@@ -59,6 +75,61 @@ describe('createGovernance: capabilities', () => {
       routesApprovals: false,
       servesRuns: true,
     });
+  });
+});
+
+describe('createGovernance: continuation_kinds', () => {
+  it('an absent list is the kinds of rev 16, which include langgraph: usable, as before', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, undefined);
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
+  });
+
+  it('a list with langgraph is usable', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, ['adk', 'langgraph', 'claude_agent_sdk']);
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
+  });
+
+  it('a list without langgraph is continuation_kind_unsupported, on every use and at assertReady', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, ['adk', 'claude_agent_sdk']);
+    await expect(h.governance.capabilities()).rejects.toMatchObject({
+      code: 'continuation_kind_unsupported',
+    });
+    await expect(h.governance.capabilities()).rejects.toThrow(
+      '(adk, claude_agent_sdk) without langgraph'
+    );
+    await expect(h.governance.capabilities()).rejects.toBeInstanceOf(GovernanceError);
+    await expect(h.governance.assertReady()).rejects.toMatchObject({
+      code: 'continuation_kind_unsupported',
+    });
+    expect(h.seen('GET', '/v1/capabilities')).toHaveLength(1);
+  });
+
+  it('an empty list advertises no kind at all: refused, not read as "not advertised"', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, []);
+    await expect(h.governance.capabilities()).rejects.toMatchObject({
+      code: 'continuation_kind_unsupported',
+    });
+    await expect(h.governance.capabilities()).rejects.toThrow(
+      'advertises an empty list of continuation kinds'
+    );
+  });
+
+  it('a continuation_kinds member that is not an array is not an advertised list: usable, and the answer is kept', async () => {
+    const h = await createHarness();
+    advertiseKinds(h, null);
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: true });
+    expect(h.seen('GET', '/v1/capabilities')).toHaveLength(1);
+  });
+
+  it('a list without langgraph on a deployment that routes no approvals is usable: no approval can be opened', async () => {
+    const h = await createHarness({ advertise: ['decisions', 'records'] });
+    advertiseKinds(h, ['adk']);
+    await expect(h.governance.capabilities()).resolves.toMatchObject({ routesApprovals: false });
   });
 });
 
