@@ -612,6 +612,28 @@ describe('runResumer', () => {
     });
   });
 
+  it('start-up fails when the deployment lists the continuation kinds it accepts without langgraph', async () => {
+    const h = await createHarness();
+    h.intercept = async (request) => {
+      if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
+      const envelope = (await (await h.mock.app.fetch(request)).json()) as {
+        data: Record<string, unknown>;
+      };
+      envelope.data.continuation_kinds = ['adk'];
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const graph = buildGraph({
+      script: [],
+      toolNode: governedToolNode([], { toolRefs: {}, governance: h.governance }),
+    });
+    await expect(runResumer(graph, { governance: h.governance })).rejects.toMatchObject({
+      code: 'continuation_kind_unsupported',
+    });
+  });
+
   it('start-up fails when the stream cannot be opened', async () => {
     const { h, graph } = await pausedAgent();
     h.intercept = (request) =>

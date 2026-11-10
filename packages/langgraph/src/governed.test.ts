@@ -870,16 +870,47 @@ describe('governed: the decision table', () => {
     expect(counters.runs).toHaveLength(0);
   });
 
-  it('approvals advertised without runs: the first use throws runs_required and nothing runs', async () => {
-    const h = await createHarness({ advertise: ['approvals', 'records'] });
+  it('approvals advertised without runs: the first use throws runs_required, onError hears it once, and nothing runs', async () => {
+    const errors: string[] = [];
+    const h = await createHarness({
+      advertise: ['approvals', 'records'],
+      governance: { onError: (e) => errors.push(e.code) },
+    });
     const counters: Counters = { runs: [] };
     const { search } = makeTools(counters);
     const wrapped = governed(search, { toolRef: TOOL_REFS.search, governance: h.governance });
     await expect(
       wrapped.invoke({ type: 'tool_call', id: 'c1', name: 'search', args: { q: 'x' } }, CFG)
     ).rejects.toMatchObject({ code: 'runs_required' });
+    expect(errors).toEqual(['runs_required']);
     expect(counters.runs).toHaveLength(0);
     expect(h.seen('POST', '/v1/decisions')).toHaveLength(0);
+  });
+
+  it('a deployment whose continuation_kinds lacks langgraph: the first use throws continuation_kind_unsupported, nothing runs and no decision is asked', async () => {
+    const errors: string[] = [];
+    const h = await createHarness({ governance: { onError: (e) => errors.push(e.code) } });
+    h.intercept = async (request) => {
+      if (new URL(request.url).pathname !== '/v1/capabilities') return undefined;
+      const envelope = (await (await h.mock.app.fetch(request)).json()) as {
+        data: Record<string, unknown>;
+      };
+      envelope.data.continuation_kinds = ['adk', 'claude_agent_sdk'];
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const counters: Counters = { runs: [] };
+    const { search } = makeTools(counters);
+    const wrapped = governed(search, { toolRef: TOOL_REFS.search, governance: h.governance });
+    await expect(
+      wrapped.invoke({ type: 'tool_call', id: 'c1', name: 'search', args: { q: 'x' } }, CFG)
+    ).rejects.toMatchObject({ code: 'continuation_kind_unsupported' });
+    expect(errors).toEqual(['continuation_kind_unsupported']);
+    expect(counters.runs).toHaveLength(0);
+    expect(h.seen('POST', '/v1/decisions')).toHaveLength(0);
+    expect(h.seen('POST', '/v1/runs')).toHaveLength(0);
   });
 
   it('neither runs nor approvals advertised: skips the run and decides', async () => {
