@@ -108,15 +108,15 @@ describe('the skill in the exercise', () => {
       version: string;
     };
     expect(contractVersions(ROOT)).toEqual({
-      '@noblecloak/client': '0.13.0',
-      '@noblecloak/spec': '0.12.0',
+      '@noblecloak/client': '0.13.1',
+      '@noblecloak/spec': '0.12.1',
     });
     expect(sources).toEqual([
       {
         kind: 'registry',
         name: '@noblecloak/client',
-        file: 'noblecloak-client-0.13.0.tgz',
-        version: '0.13.0',
+        file: 'noblecloak-client-0.13.1.tgz',
+        version: '0.13.1',
       },
       {
         kind: 'packed',
