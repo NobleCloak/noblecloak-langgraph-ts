@@ -18,7 +18,7 @@ bun add langchain # only for `@noblecloak/langgraph/middleware` (the `createAgen
 The middleware subpath needs `@langchain/core` `^1.2.14` (what `langchain` 1.5.15 requires); the main entry works with the peer range above.
 
 Developed against `langchain` 1.5.15, `@langchain/langgraph` 1.4.19 and `@langchain/core` 1.2.14. 1.5.15 is the `langchain` version tested; 1.5.16 and later need `@langchain/core` 1.2.17 or later. It needs a deployment that serves
-the module API at contract v1 rev 4 or later (the main entry; `gatewayTools` needs rev 7 or later), and is tested against rev 18 (release `contract-v1-rev18`; the tests run against the mock of `@noblecloak/spec` 0.12.0). Three behaviours it relies on arrived in rev 4: `created_by=me` on the approvals list and stream, the continuation echoed
+the module API at contract v1 rev 4 or later (the main entry; `gatewayTools` needs rev 7 or later), and is tested against rev 18 (release `contract-v1-rev18`; the tests run against the mock of `@noblecloak/spec` 0.12.1). Three behaviours it relies on arrived in rev 4: `created_by=me` on the approvals list and stream, the continuation echoed
 to the principal that created an approval, and the service-principal visibility rule. A deployment older than rev 4
 offers none of the three.
 
