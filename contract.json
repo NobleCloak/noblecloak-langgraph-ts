@@ -3,10 +3,10 @@
   "contractRevision": "contract-v1-rev18",
   "packages": {
     "@noblecloak/client": {
-      "version": "0.13.0"
+      "version": "0.13.1"
     },
     "@noblecloak/spec": {
-      "version": "0.12.0"
+      "version": "0.12.1"
     }
   }
 }
