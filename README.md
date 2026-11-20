@@ -48,10 +48,12 @@ bun run exercise:skill # the skill's acceptance run: pack the adapter, apply the
 
 ## Contract packages
 
-The adapter depends on `@noblecloak/client` and is tested against the mock in `@noblecloak/spec`. Both install
-by exact version from the public npm registry (registry.npmjs.org), like every other dependency: the repository
-maps no scope to another registry and needs no token. `contract.json` names the pair and
-`scripts/contract.test.ts` keeps it the same everywhere it is named.
+The adapter depends on `@noblecloak/client` and is tested against the mock in `@noblecloak/spec`. Here both
+install by exact version from the public npm registry (registry.npmjs.org), like every other dependency: the
+repository maps no scope to another registry and needs no token. `contract.json` names the pair and
+`scripts/contract.test.ts` keeps it the same everywhere it is named. The published adapter names the client as
+a bounded range around that version (`contract.json` records it too), so an application with its own
+`@noblecloak/client` inside the range installs one copy.
 
 ## Related
 

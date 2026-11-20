@@ -49,13 +49,28 @@ locally or in CI, and `bun.lock` records the packages with no URL. If your own `
 `@noblecloak/*` dependency npm does not have (see below).
 
 `contract.json` records the pair (`"phase": "registry"`, the two versions, and the contract revision they
-implement as the label `contractRevision`). The adapter, the example and the docs snippets name each package at
-exactly that version; the root manifest names neither and nothing has `overrides`. `scripts/contract.test.ts`
-fails when `contract.json`, those manifests and the installed versions disagree, when a manifest has an
-`overrides` or `resolutions` block or a `file:`/`link:` dependency, or when a `vendor/` directory exists.
+implement as the label `contractRevision`). The example and the docs snippets name each package at exactly that
+version, and so does the adapter for the spec (a devDependency); the root manifest names neither and nothing
+has `overrides`. `scripts/contract.test.ts` fails when `contract.json`, those manifests and the installed
+versions disagree, when a manifest has an `overrides` or `resolutions` block or a `file:`/`link:` dependency, or
+when a `vendor/` directory exists.
 
-To move to a new pair: change the two versions (and the revision label) in `contract.json`, change the same
-versions in the manifests that name them, and run `bun install` to rewrite `bun.lock`.
+The adapter's `dependencies` is the one place that names a range. `contract.json` records it beside the
+client's version as `"range": ">=<floor> <<ceiling>"`, and `packages/langgraph/package.json` names the client as
+exactly that string, so an application whose own `@noblecloak/client` is inside the range installs one copy of
+it. The recorded version is the one installed and tested here and must lie inside the range. The range is
+bounded on purpose:
+
+- The ceiling is the next minor after the tested version. A client minor has carried a breaking change before
+  1.0, so a new minor is admitted only by moving the pair to it, running the gate and releasing the adapter.
+  A client patch needs no adapter release.
+- The floor is the oldest client the adapter's source works with. CI does not run the tests at the floor:
+  raise it in the same pull request as the first use of a newer client API, and to test it by hand set the
+  example's and the snippets' client to the floor in a scratch copy and run the adapter's tests.
+
+To move to a new pair: change the two versions (and the revision label) in `contract.json`, raise the range's
+ceiling to the minor after the new client version (and its floor if the adapter now needs more), change the
+same versions and the range in the manifests that name them, and run `bun install` to rewrite `bun.lock`.
 
 ## Packing and releasing
 
@@ -68,15 +83,16 @@ versions in the manifests that name them, and run `bun install` to rewrite `bun.
   a version npm lacks. That check does not run on a hand-run `npm publish`; see the next item.
 - `bun run release:check -- [<tarball-or-directory> ...]` runs the same dependency check against npm for the
   named tarballs (default `artifacts/`) and publishes nothing; it exits 1 when a `@noblecloak/*` dependency is
-  not an exact version npm has. **Run it on the packed tarball before any manual first publish (seed) and publish
+  neither an exact version npm has nor a bounded range (`>=x.y.z <a.b.c`) holding a version npm has. **Run it on the packed tarball before any manual first publish (seed) and publish
   only on exit 0.** Nothing enforces that step: it is a maintainer's check, because `npm publish` run by hand
   never executes `scripts/release.ts`.
 - With `--registry https://npm.pkg.github.com` it needs a non-empty `NODE_AUTH_TOKEN`, publishes only
   `@noblecloak/langgraph` (it skips any other public package with a printed line), publishes a package the
   registry answers 404 for, skips a version the registry has, and stops on any other answer.
 - It reads each tarball's `package.json` first and refuses to publish anything when a `@noblecloak/*`
-  dependency is not an exact version the registry has, or this run publishes. The adapter's tarball names the
-  client at the exact version `contract.json` records. On npm this covers a package skipped as not yet seeded.
+  dependency is neither an exact version the registry has, or this run publishes, nor a bounded range
+  (`>=x.y.z <a.b.c`) holding such a version; a caret or tilde range is refused. The adapter's tarball names the
+  client as the range `contract.json` records. On npm this covers a package skipped as not yet seeded.
 - Any other `--registry` value, and any other argument, is refused.
 
 ## CI and publishing
@@ -119,7 +135,8 @@ Nothing runs on GitHub until this tree is pushed to a repository that exists.
   `bun run guard` checks it.
 - Every `package.json` declares `"license": "Apache-2.0"` and `"author": "NobleCloak"`.
 - No `any`. Type-only imports use `import type`. Relative imports end in `.js`.
-- Dependencies are pinned to exact versions, except the adapter's peer ranges. Dependabot opens grouped pull
+- Dependencies are pinned to exact versions, except the adapter's peer ranges and its bounded range on
+  `@noblecloak/client` (see "The contract packages"). Dependabot opens grouped pull
   requests, minor and patch together and majors together, monthly and at most three at a time
   (`.github/dependabot.yml`); a security fix or a superseding pull
   request may bump by hand, regenerating `bun.lock` with `bun install`. Dependabot does not move the bun

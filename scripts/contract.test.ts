@@ -36,20 +36,31 @@ describe('the contract pair of this repository', () => {
       phase: 'registry',
       contractRevision: 'contract-v1-rev18',
       packages: {
-        '@noblecloak/client': { version: '0.13.1' },
-        '@noblecloak/spec': { version: '0.12.1' },
+        '@noblecloak/client': { version: '0.14.1', range: '>=0.13.1 <0.15.0' },
+        '@noblecloak/spec': { version: '0.12.3' },
       },
     });
     const versions: Record<string, string> = {
-      '@noblecloak/client': '0.13.1',
-      '@noblecloak/spec': '0.12.1',
+      '@noblecloak/client': '0.14.1',
+      '@noblecloak/spec': '0.12.3',
     };
     for (const consumer of CONTRACT_CONSUMERS) {
       const block = read(ROOT, `${consumer.dir}/package.json`)[consumer.field] as Deps;
       expect(block[consumer.name], `${consumer.dir} ${consumer.field}`).toBe(
-        versions[consumer.name]
+        consumer.declares === 'range' ? '>=0.13.1 <0.15.0' : versions[consumer.name]
       );
     }
+  });
+
+  it('has one consumer that declares a range: the published adapter, for the client it depends on', () => {
+    expect(CONTRACT_CONSUMERS.filter((consumer) => consumer.declares === 'range')).toEqual([
+      {
+        dir: 'packages/langgraph',
+        name: '@noblecloak/client',
+        field: 'dependencies',
+        declares: 'range',
+      },
+    ]);
   });
 });
 
@@ -147,16 +158,77 @@ describe('checkContract', () => {
     ]);
   });
 
+  it('names a recorded range that is not >=x.y.z <a.b.c, or whose floor is not below its ceiling', () => {
+    for (const range of ['^0.14.1', '>=0.13.1', '>=0.13.1 <0.15.0-rc.1', '>=0.15.0 <0.15.0', 14]) {
+      const tree = copyOfRoot();
+      editManifest(tree, 'contract.json', (record) => {
+        (record.packages as Record<string, Json>)['@noblecloak/client'] = {
+          version: '0.14.1',
+          range,
+        };
+      });
+      // The range is not usable, so the adapter is held to the recorded version, which it does not name.
+      expect(checkContract(tree), String(range)).toEqual([
+        `contract.json: @noblecloak/client has the range ${JSON.stringify(range)}, not >=x.y.z <a.b.c`,
+        'packages/langgraph/package.json: dependencies.@noblecloak/client is >=0.13.1 <0.15.0, not 0.14.1',
+      ]);
+    }
+  });
+
+  it('names a recorded version that is outside the recorded range, at the ceiling or below the floor', () => {
+    for (const range of ['>=0.13.1 <0.14.1', '>=0.14.2 <0.15.0']) {
+      const tree = copyOfRoot();
+      editManifest(tree, 'contract.json', (record) => {
+        (record.packages as Record<string, Json>)['@noblecloak/client'] = {
+          version: '0.14.1',
+          range,
+        };
+      });
+      expect(checkContract(tree), range).toEqual([
+        `contract.json: @noblecloak/client is at 0.14.1, outside its range ${range}`,
+        'packages/langgraph/package.json: dependencies.@noblecloak/client is >=0.13.1 <0.15.0, not 0.14.1',
+      ]);
+    }
+  });
+
+  it('names a recorded range no consumer declares, and a declared range that is not recorded', () => {
+    const tree = copyOfRoot();
+    editManifest(tree, 'contract.json', (record) => {
+      const packages = record.packages as Record<string, Json>;
+      packages['@noblecloak/spec'] = { version: '0.12.3', range: '>=0.12.3 <0.13.0' };
+      packages['@noblecloak/client'] = { version: '0.14.1' };
+    });
+    expect(checkContract(tree)).toEqual([
+      'contract.json: @noblecloak/client has no range, and a consumer declares one',
+      'contract.json: @noblecloak/spec has a range, and no consumer declares one',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is >=0.13.1 <0.15.0, not 0.14.1',
+    ]);
+  });
+
+  it('names the adapter when it pins the client, and another workspace when it names the range', () => {
+    const tree = copyOfRoot();
+    editManifest(tree, 'packages/langgraph/package.json', (manifest) => {
+      (manifest.dependencies as Deps)['@noblecloak/client'] = '0.14.1';
+    });
+    editManifest(tree, 'examples/langgraph-approvals/package.json', (manifest) => {
+      (manifest.dependencies as Deps)['@noblecloak/client'] = '>=0.13.1 <0.15.0';
+    });
+    expect(checkContract(tree)).toEqual([
+      'examples/langgraph-approvals/package.json: dependencies.@noblecloak/client is >=0.13.1 <0.15.0, not 0.14.1',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is 0.14.1, not >=0.13.1 <0.15.0',
+    ]);
+  });
+
   it('names a recorded version that is not the one installed and the manifests name', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'contract.json', (record) => {
       (record.packages as Record<string, Json>)['@noblecloak/spec'] = { version: '0.10.0' };
     });
     expect(checkContract(tree)).toEqual([
-      'node_modules/@noblecloak/spec: installed 0.12.1, not 0.10.0',
-      'docs/snippets/package.json: devDependencies.@noblecloak/spec is 0.12.1, not 0.10.0',
-      'examples/langgraph-approvals/package.json: dependencies.@noblecloak/spec is 0.12.1, not 0.10.0',
-      'packages/langgraph/package.json: devDependencies.@noblecloak/spec is 0.12.1, not 0.10.0',
+      'node_modules/@noblecloak/spec: installed 0.12.3, not 0.10.0',
+      'docs/snippets/package.json: devDependencies.@noblecloak/spec is 0.12.3, not 0.10.0',
+      'examples/langgraph-approvals/package.json: dependencies.@noblecloak/spec is 0.12.3, not 0.10.0',
+      'packages/langgraph/package.json: devDependencies.@noblecloak/spec is 0.12.3, not 0.10.0',
     ]);
   });
 
@@ -169,8 +241,8 @@ describe('checkContract', () => {
       (manifest.devDependencies as Deps)['@noblecloak/spec'] = '0.9.0';
     });
     expect(checkContract(tree)).toEqual([
-      'packages/langgraph/package.json: dependencies.@noblecloak/client is ^0.13.0, not 0.13.1',
-      'scripts/package.json: devDependencies.@noblecloak/spec is 0.9.0, not 0.12.1',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is ^0.13.0, not >=0.13.1 <0.15.0',
+      'scripts/package.json: devDependencies.@noblecloak/spec is 0.9.0, not 0.12.3',
     ]);
   });
 
@@ -178,11 +250,11 @@ describe('checkContract', () => {
     const tree = copyOfRoot();
     editManifest(tree, 'docs/snippets/package.json', (manifest) => {
       const dev = manifest.devDependencies as Deps;
-      manifest.dependencies = { ...(manifest.dependencies as Deps), '@noblecloak/spec': '0.12.1' };
+      manifest.dependencies = { ...(manifest.dependencies as Deps), '@noblecloak/spec': '0.12.3' };
       delete dev['@noblecloak/spec'];
     });
     expect(checkContract(tree)).toEqual([
-      'docs/snippets/package.json: devDependencies.@noblecloak/spec is missing, not 0.12.1',
+      'docs/snippets/package.json: devDependencies.@noblecloak/spec is missing, not 0.12.3',
     ]);
   });
 
@@ -237,7 +309,7 @@ describe('checkContract', () => {
       'package.json: devDependencies.left-pad is file:./vendor/left-pad.tgz, a path dependency',
       'docs/snippets/package.json: dependencies.right-pad is npm:link:../right-pad, a path dependency',
       'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.13.0.tgz, a path dependency',
-      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.13.0.tgz, not 0.13.1',
+      'packages/langgraph/package.json: dependencies.@noblecloak/client is file:../../vendor/noblecloak-client-0.13.0.tgz, not >=0.13.1 <0.15.0',
     ]);
   });
 
@@ -257,8 +329,8 @@ describe('checkContract', () => {
     });
     rmSync(join(tree, 'node_modules/@noblecloak/spec'), { recursive: true });
     expect(checkContract(tree)).toEqual([
-      'node_modules/@noblecloak/client: installed 0.10.0, not 0.13.1',
-      'node_modules/@noblecloak/spec: installed undefined, not 0.12.1',
+      'node_modules/@noblecloak/client: installed 0.10.0, not 0.14.1',
+      'node_modules/@noblecloak/spec: installed undefined, not 0.12.3',
     ]);
   });
 });
