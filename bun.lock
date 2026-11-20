@@ -52,7 +52,7 @@
     },
     "packages/langgraph": {
       "name": "@noblecloak/langgraph",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "dependencies": {
         "@noblecloak/client": ">=0.13.1 <0.15.0",
       },
