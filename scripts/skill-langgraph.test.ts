@@ -108,15 +108,15 @@ describe('the skill in the exercise', () => {
       version: string;
     };
     expect(contractVersions(ROOT)).toEqual({
-      '@noblecloak/client': '0.13.1',
-      '@noblecloak/spec': '0.12.1',
+      '@noblecloak/client': '0.14.1',
+      '@noblecloak/spec': '0.12.3',
     });
     expect(sources).toEqual([
       {
         kind: 'registry',
         name: '@noblecloak/client',
-        file: 'noblecloak-client-0.13.1.tgz',
-        version: '0.13.1',
+        file: 'noblecloak-client-0.14.1.tgz',
+        version: '0.14.1',
       },
       {
         kind: 'packed',
@@ -150,6 +150,24 @@ describe('the skill in the exercise', () => {
       manifest({ '@noblecloak/client': '0.10.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
         '@noblecloak/a names @noblecloak/client@0.10.0, but contract.json records 0.13.0'
+      );
+      // A recorded range: the manifest may name it, and the registry tarball is still the recorded version.
+      writeFileSync(
+        join(root, 'contract.json'),
+        JSON.stringify({
+          packages: { '@noblecloak/client': { version: '0.13.0', range: '>=0.12.0 <0.14.0' } },
+        })
+      );
+      manifest({ '@noblecloak/client': '>=0.12.0 <0.14.0' });
+      expect(tarballSources(root, '@noblecloak/a')[1]).toEqual({
+        kind: 'registry',
+        name: '@noblecloak/client',
+        file: 'noblecloak-client-0.13.0.tgz',
+        version: '0.13.0',
+      });
+      manifest({ '@noblecloak/client': '>=0.12.0 <0.15.0' });
+      expect(() => tarballSources(root, '@noblecloak/a')).toThrow(
+        '@noblecloak/a names @noblecloak/client@>=0.12.0 <0.15.0, but contract.json records 0.13.0 in the range >=0.12.0 <0.14.0'
       );
       manifest({ '@noblecloak/other': '1.0.0' });
       expect(() => tarballSources(root, '@noblecloak/a')).toThrow(

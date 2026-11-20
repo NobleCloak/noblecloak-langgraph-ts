@@ -9,6 +9,12 @@
  *   version in the field listed there, and any other manifest that names one at that version too;
  * - the versions bun installed under `node_modules/@noblecloak/`.
  *
+ * One entry is a range instead: the adapter is published, so its `dependencies` names the client as the
+ * bounded range `contract.json` records beside the version (`"range": ">=x.y.z <a.b.c"`), which an application
+ * with its own client inside the range satisfies with one copy. The recorded version is still the one
+ * installed and tested here, and it must lie inside the range. Only the consumers marked `declares: 'range'`
+ * name a range; a range anywhere else, or a recorded range no consumer declares, is a disagreement.
+ *
  * And nothing is vendored or redirected: the root manifest names neither package, no manifest has an `overrides`
  * or `resolutions` block, no manifest has a `file:` or `link:` dependency, and there is no `vendor/` directory.
  * `checkContract` returns one line per disagreement and an empty list when there is none.
@@ -16,6 +22,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
+import { inBoundedRange, parseBoundedRange } from './bounded-range.js';
 import { listWorkspacePackages } from './workspace.js';
 
 export const CONTRACT_PACKAGES = ['@noblecloak/client', '@noblecloak/spec'] as const;
@@ -27,8 +34,15 @@ export const CONTRACT_CONSUMERS: readonly {
   readonly dir: string;
   readonly name: ContractPackage;
   readonly field: 'dependencies' | 'devDependencies';
+  /** `range`: the manifest names the recorded range, not the recorded version (a published dependency). */
+  readonly declares?: 'range';
 }[] = [
-  { dir: 'packages/langgraph', name: '@noblecloak/client', field: 'dependencies' },
+  {
+    dir: 'packages/langgraph',
+    name: '@noblecloak/client',
+    field: 'dependencies',
+    declares: 'range',
+  },
   { dir: 'packages/langgraph', name: '@noblecloak/spec', field: 'devDependencies' },
   { dir: 'examples/langgraph-approvals', name: '@noblecloak/client', field: 'dependencies' },
   { dir: 'examples/langgraph-approvals', name: '@noblecloak/spec', field: 'dependencies' },
@@ -39,7 +53,9 @@ export const CONTRACT_CONSUMERS: readonly {
 interface ContractRecord {
   readonly phase?: unknown;
   readonly contractRevision?: unknown;
-  readonly packages?: Readonly<Record<string, { readonly version?: unknown }>>;
+  readonly packages?: Readonly<
+    Record<string, { readonly version?: unknown; readonly range?: unknown }>
+  >;
 }
 
 type Json = Record<string, unknown>;
@@ -75,6 +91,7 @@ export function checkContract(root: string): string[] {
     problems.push(`contract.json: lists ${names.join(', ')}, not ${CONTRACT_PACKAGES.join(', ')}`);
 
   const versions = new Map<string, string>();
+  const ranges = new Map<string, string>();
   for (const name of CONTRACT_PACKAGES) {
     const version = packages[name]?.version;
     if (version === undefined) continue;
@@ -85,6 +102,25 @@ export function checkContract(root: string): string[] {
       continue;
     }
     versions.set(name, version);
+    const range = packages[name]?.range;
+    const declared = CONTRACT_CONSUMERS.some((c) => c.name === name && c.declares === 'range');
+    if (range === undefined) {
+      if (declared)
+        problems.push(`contract.json: ${name} has no range, and a consumer declares one`);
+    } else {
+      const bounds = typeof range === 'string' ? parseBoundedRange(range) : undefined;
+      if (bounds === undefined)
+        problems.push(
+          `contract.json: ${name} has the range ${JSON.stringify(range)}, not >=x.y.z <a.b.c`
+        );
+      else if (!inBoundedRange(version, bounds))
+        problems.push(
+          `contract.json: ${name} is at ${version}, outside its range ${range as string}`
+        );
+      else if (!declared)
+        problems.push(`contract.json: ${name} has a range, and no consumer declares one`);
+      else ranges.set(name, range as string);
+    }
     const installedFile = join(root, 'node_modules', name, 'package.json');
     const installed = existsSync(installedFile) ? readJson(installedFile).version : undefined;
     if (installed !== version)
@@ -100,7 +136,8 @@ export function checkContract(root: string): string[] {
     dir === root ? 'package.json' : `${relative(root, dir).split(sep).join('/')}/package.json`;
   for (const dir of [root, ...listWorkspacePackages(root).map((pkg) => pkg.dir)]) {
     const manifest = readJson(join(dir, 'package.json'));
-    manifests.set(dir === root ? '' : relative(root, dir).split(sep).join('/'), manifest);
+    const workspace = dir === root ? '' : relative(root, dir).split(sep).join('/');
+    manifests.set(workspace, manifest);
     for (const block of ['overrides', 'resolutions'] as const) {
       if (block in manifest) problems.push(`${label(dir)}: has ${block}; nothing is redirected`);
     }
@@ -113,8 +150,18 @@ export function checkContract(root: string): string[] {
         if (version === undefined) continue;
         if (dir === root)
           problems.push(`package.json: ${field}.${dependency}; the root names no contract package`);
-        else if (range !== version)
-          problems.push(`${label(dir)}: ${field}.${dependency} is ${range}, not ${version}`);
+        else {
+          const declaresRange = CONTRACT_CONSUMERS.some(
+            (c) =>
+              c.dir === workspace &&
+              c.name === dependency &&
+              c.field === field &&
+              c.declares === 'range'
+          );
+          const expected = declaresRange ? (ranges.get(dependency) ?? version) : version;
+          if (range !== expected)
+            problems.push(`${label(dir)}: ${field}.${dependency} is ${range}, not ${expected}`);
+        }
       }
     }
   }

@@ -30,8 +30,9 @@
  * Before publishing anything it checks every package it will publish against the internal (`@noblecloak/*` or
  * workspace) entries in the `dependencies` and `peerDependencies` of the package.json inside that package's
  * tarball, where `bun pm pack` has already rewritten `workspace:` ranges. Each such entry must be an exact
- * version that the registry already has, or that this run publishes. A `file:` range is not an exact version, so
- * a tarball packed while the contract packages are vendored cannot be published. Any failure publishes nothing and
+ * version that the registry already has, or that this run publishes, or a bounded range (`>=x.y.z <a.b.c`) that
+ * such a version lies in. A `file:` range is neither, so a tarball packed while the contract packages are
+ * vendored cannot be published; a caret or tilde range is neither as well. Any failure publishes nothing and
  * exits 1; an unseeded dependency is one of those failures, not a warning. On npm the same check covers a package
  * that is skipped as not yet seeded: the run fails instead of skipping it quietly, so a release run never goes
  * green over a seed whose `@noblecloak/*` dependency npm lacks. What the script cannot do is stop a hand-run
@@ -43,6 +44,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import { inBoundedRange, parseBoundedRange } from './bounded-range.js';
 import { listTarEntries, runCommand, verifyTarballs } from './pack-all.js';
 import type { EntryLister, Runner } from './pack-all.js';
 import { listPublicPackages } from './workspace.js';
@@ -150,6 +152,10 @@ export const readPackedManifest: ManifestReader = (tarball) => {
 
 const EXACT_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 
+/** How a dependency's range is written in the messages: `name@1.2.3`, or `name@">=1.2.3 <1.4.0"`. */
+const spec = (dep: InternalDependency): string =>
+  EXACT_VERSION.test(dep.range) ? `${dep.name}@${dep.range}` : `${dep.name}@"${dep.range}"`;
+
 /** A dependency on another package this repository publishes. */
 export interface InternalDependency {
   readonly name: string;
@@ -180,7 +186,8 @@ export interface PublishCandidate {
 
 /**
  * The problems that stop the run, one line per unmet dependency. A dependency is met when its range is an exact
- * version that the registry already has, or that a candidate publishes in this run at exactly that version.
+ * version that the registry already has, or that a candidate publishes in this run at exactly that version; or
+ * a bounded range (`>=x.y.z <a.b.c`) that a version the registry has, or one this run publishes, lies in.
  * `label` names the registry in the messages. `checkOnly` lists packages the run skips: their dependencies are
  * checked the same way.
  */
@@ -197,26 +204,30 @@ export function unmetDependencies(
   for (const candidate of [...candidates, ...checkOnly]) {
     const who = `${candidate.name}@${candidate.version}`;
     for (const dep of candidate.dependencies) {
-      if (!EXACT_VERSION.test(dep.range)) {
+      const bounds = EXACT_VERSION.test(dep.range) ? undefined : parseBoundedRange(dep.range);
+      if (!EXACT_VERSION.test(dep.range) && bounds === undefined) {
         problems.push(
-          `${who} depends on ${dep.name}@${dep.range}, which is not an exact version; the packed tarball must pin it.`
+          `${who} depends on ${dep.name}@${dep.range}, which is neither an exact version nor a bounded range (>=x.y.z <a.b.c); the packed tarball must name one.`
         );
         continue;
       }
-      if (publishing.get(dep.name) === dep.range) continue;
+      const meets = (version: string): boolean =>
+        bounds === undefined ? version === dep.range : inBoundedRange(version, bounds);
+      const queuedVersion = publishing.get(dep.name);
+      if (queuedVersion !== undefined && meets(queuedVersion)) continue;
       const state = registry(dep.name);
-      if (state.kind === 'versions' && state.versions.includes(dep.range)) continue;
+      if (state.kind === 'versions' && state.versions.some(meets)) continue;
       const where =
         state.kind === 'not-found'
           ? `${dep.name} is not on ${label} yet`
-          : `${label} has no ${dep.name}@${dep.range}`;
+          : `${label} has no ${spec(dep)}`;
       const queued = publishing.get(dep.name);
       const run =
         queued === undefined
           ? 'and this run does not publish it'
           : `and this run publishes ${dep.name}@${queued}`;
       problems.push(
-        `${who} depends on ${dep.name}@${dep.range}, but ${where} ${run}. Publish ${dep.name}@${dep.range} to ${label} first, or in the same release.`
+        `${who} depends on ${spec(dep)}, but ${where} ${run}. Publish ${spec(dep)} to ${label} first, or in the same release.`
       );
     }
   }

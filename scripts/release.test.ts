@@ -510,7 +510,58 @@ describe('release dependency guard', () => {
     expect(release(root, (l) => lines.push(l), lookup, fakeRunner(calls))).toBe(1);
     expect(published(calls)).toEqual([]);
     expect(lines).toContain(
-      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@file:../../vendor/noblecloak-client-0.10.0.tgz, which is not an exact version; the packed tarball must pin it.'
+      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@file:../../vendor/noblecloak-client-0.10.0.tgz, which is neither an exact version nor a bounded range (>=x.y.z <a.b.c); the packed tarball must name one.'
+    );
+  });
+
+  it('publishes an adapter whose client range holds a version npm has, and refuses one npm has nothing in', () => {
+    writePackage('packages/langgraph', {
+      name: '@noblecloak/langgraph',
+      version: '1.0.0',
+      dependencies: { '@noblecloak/client': '>=0.13.1 <0.15.0' },
+    });
+    rmSync(join(root, 'artifacts'), { recursive: true });
+    packAll(root, fakeRunner([]));
+    const run = (clientVersions: string[]): { code: number; lines: string[]; sent: string[] } => {
+      const calls: string[][] = [];
+      const lines: string[] = [];
+      const lookup = registry({
+        '@noblecloak/langgraph': { kind: 'versions', versions: ['0.9.0'] },
+        '@noblecloak/client': { kind: 'versions', versions: clientVersions },
+      });
+      const code = release(root, (l) => lines.push(l), lookup, fakeRunner(calls));
+      return { code, lines, sent: published(calls) };
+    };
+    const met = run(['0.13.0', '0.14.1']);
+    expect(met.code).toBe(0);
+    expect(met.sent).toContain('noblecloak-langgraph-1.0.0.tgz');
+    // The ceiling itself and a version under the floor are outside the range.
+    const unmet = run(['0.13.0', '0.15.0', '0.14.0-rc.1']);
+    expect(unmet.code).toBe(1);
+    expect(unmet.sent).toEqual([]);
+    expect(unmet.lines).toContain(
+      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@">=0.13.1 <0.15.0", but npm has no @noblecloak/client@">=0.13.1 <0.15.0" and this run does not publish it. Publish @noblecloak/client@">=0.13.1 <0.15.0" to npm first, or in the same release.'
+    );
+  });
+
+  it('refuses a caret range, which is not the bounded shape', () => {
+    writePackage('packages/langgraph', {
+      name: '@noblecloak/langgraph',
+      version: '1.0.0',
+      dependencies: { '@noblecloak/client': '^0.14.1' },
+    });
+    rmSync(join(root, 'artifacts'), { recursive: true });
+    packAll(root, fakeRunner([]));
+    const calls: string[][] = [];
+    const lines: string[] = [];
+    const lookup = registry({
+      '@noblecloak/langgraph': { kind: 'versions', versions: [] },
+      '@noblecloak/client': { kind: 'versions', versions: ['0.14.1'] },
+    });
+    expect(release(root, (l) => lines.push(l), lookup, fakeRunner(calls))).toBe(1);
+    expect(published(calls)).toEqual([]);
+    expect(lines).toContain(
+      '::error::@noblecloak/langgraph@1.0.0 depends on @noblecloak/client@^0.14.1, which is neither an exact version nor a bounded range (>=x.y.z <a.b.c); the packed tarball must name one.'
     );
   });
 
@@ -554,6 +605,18 @@ describe('unmetDependencies and publishOrder', () => {
     expect(unmetDependencies([candidate('x', [dep('y')]), candidate('y', [])], nothing)).toEqual(
       []
     );
+  });
+
+  it('accepts a bounded range this run publishes a version in, and refuses one it publishes outside', () => {
+    const range = '>=1.0.0 <1.2.0';
+    expect(
+      unmetDependencies([candidate('x', [dep('y', range)]), candidate('y', [], '1.1.4')], nothing)
+    ).toEqual([]);
+    expect(
+      unmetDependencies([candidate('x', [dep('y', range)]), candidate('y', [], '1.2.0')], nothing)
+    ).toEqual([
+      'x@1.0.0 depends on y@">=1.0.0 <1.2.0", but npm has no y@">=1.0.0 <1.2.0" and this run publishes y@1.2.0. Publish y@">=1.0.0 <1.2.0" to npm first, or in the same release.',
+    ]);
   });
 
   it('refuses a dependency this run publishes at another version', () => {

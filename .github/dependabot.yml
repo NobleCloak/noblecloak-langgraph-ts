@@ -1,4 +1,5 @@
-# Every dependency in package.json is pinned exactly (the adapter's peer ranges aside), so a Dependabot pull
+# Every dependency in package.json is pinned exactly (the adapter's peer ranges and its bounded range on
+# @noblecloak/client aside; scripts/contract.test.ts fails a pull request that rewrites that range), so a Dependabot pull
 # request (or a hand bump that regenerates bun.lock) is the only way one moves. There is deliberately no
 # `allow:` block: an allowlist hides every dependency it does not name. Two pins sit outside what these
 # ecosystems update: bun (`packageManager`) and Node (`.node-version`); bump them by hand. The github-actions

@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
+import { parseBoundedRange } from './bounded-range.js';
 import { findViolations } from './check-private-deps.js';
 import { listWorkspacePackages } from './workspace.js';
 
@@ -64,11 +65,20 @@ const manifestLicenseViolations = (manifest: Record<string, unknown>): string[] 
 
 // An exact version or a workspace link; a file: path, even to a tarball in the tree, is not a pin.
 const PINNED = /^(\d+\.\d+\.\d+(-[\w.]+)?|workspace:.+)$/;
-/** Every dependency range in dependencies, devDependencies and optionalDependencies that is not an exact pin. */
+// The one range allowed: a `@noblecloak/*` entry of `dependencies` as `>=x.y.z <a.b.c`. Which manifest may
+// carry it, and what it must be, is `scripts/contract.ts` (the adapter, the range contract.json records).
+const boundedContractRange = (field: string, name: string, range: string): boolean =>
+  field === 'dependencies' &&
+  name.startsWith('@noblecloak/') &&
+  parseBoundedRange(range) !== undefined;
+/**
+ * Every dependency range in dependencies, devDependencies and optionalDependencies that is neither an exact pin
+ * nor the bounded range of a `@noblecloak/*` dependency.
+ */
 const pinViolations = (manifest: Record<string, unknown>): string[] =>
   ['dependencies', 'devDependencies', 'optionalDependencies'].flatMap((field) =>
     Object.entries((manifest[field] ?? {}) as Record<string, string>)
-      .filter(([, range]) => !PINNED.test(range))
+      .filter(([name, range]) => !PINNED.test(range) && !boundedContractRange(field, name, range))
       .map(([name, range]) => `${field}.${name}: ${range}`)
   );
 
@@ -142,6 +152,20 @@ describe('versions are pinned exactly', () => {
       pinViolations({ dependencies: { d: 'file:../vendor/noblecloak-client-0.1.0.tgz' } })
     ).toEqual(['dependencies.d: file:../vendor/noblecloak-client-0.1.0.tgz']);
     expect(pinViolations({ dependencies: { a: '^1.2.3' } })).toEqual(['dependencies.a: ^1.2.3']);
+    // A bounded range is allowed for a @noblecloak/* entry of dependencies, and nowhere else.
+    expect(pinViolations({ dependencies: { '@noblecloak/client': '>=0.13.1 <0.15.0' } })).toEqual(
+      []
+    );
+    expect(
+      pinViolations({
+        dependencies: { a: '>=1.0.0 <2.0.0', '@noblecloak/client': '^0.14.1' },
+        devDependencies: { '@noblecloak/spec': '>=0.12.0 <0.13.0' },
+      })
+    ).toEqual([
+      'dependencies.a: >=1.0.0 <2.0.0',
+      'dependencies.@noblecloak/client: ^0.14.1',
+      'devDependencies.@noblecloak/spec: >=0.12.0 <0.13.0',
+    ]);
     expect(pinViolations({ devDependencies: { a: 'latest' } })).toEqual([
       'devDependencies.a: latest',
     ]);

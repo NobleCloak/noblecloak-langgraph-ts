@@ -93,8 +93,8 @@ export type TarballSource =
 /**
  * The tarballs the skill installs, sorted by name: `rootPackage` as `pack:all` packed it into `artifacts/`, and
  * each other `@noblecloak/*` entry in its `dependencies` from the registry, at the version `contract.json` records.
- * A dependency that `contract.json` does not record, or that the manifest names at another version, throws:
- * the tarball the project installs would not be the one the adapter declares.
+ * A dependency that `contract.json` does not record, or that the manifest names as anything but the recorded
+ * version or the recorded range, throws: the tarball the project installs would not be one the adapter declares.
  */
 export function tarballSources(root: string, rootPackage: string): TarballSource[] {
   const pkg = listPublicPackages(root).find((candidate) => candidate.name === rootPackage);
@@ -116,9 +116,10 @@ export function tarballSources(root: string, rootPackage: string): TarballSource
     const version = versions[dependency];
     if (version === undefined)
       throw new Error(`${dependency} is not in contract.json; nothing to install it from`);
-    if (range !== version)
+    const recordedRange = contractRanges(root)[dependency];
+    if (range !== version && range !== recordedRange)
       throw new Error(
-        `${rootPackage} names ${dependency}@${range}, but contract.json records ${version}`
+        `${rootPackage} names ${dependency}@${range}, but contract.json records ${version}${recordedRange === undefined ? '' : ` in the range ${recordedRange}`}`
       );
     sources.push({
       kind: 'registry',
@@ -137,6 +138,18 @@ export function contractVersions(root: string): Record<string, string> {
   };
   return Object.fromEntries(
     Object.entries(contract.packages).map(([name, entry]) => [name, entry.version])
+  );
+}
+
+/** The ranges `contract.json` records beside a version, by package name; a package without one is absent. */
+export function contractRanges(root: string): Record<string, string> {
+  const contract = JSON.parse(readFileSync(join(root, 'contract.json'), 'utf8')) as {
+    packages: Record<string, { range?: string }>;
+  };
+  return Object.fromEntries(
+    Object.entries(contract.packages).flatMap(([name, entry]) =>
+      entry.range === undefined ? [] : [[name, entry.range]]
+    )
   );
 }
 
